@@ -48,8 +48,6 @@ class ExactResultClient:
         results = [
             {
                 "task_id": task["task_id"],
-                "candidate_id": packet["candidate_id"],
-                "expert": task["expert"],
                 "findings": [],
             }
             for packet in packets
@@ -76,8 +74,6 @@ class UnknownTaskClient:
                 "expert_results": [
                     {
                         "task_id": "TASK-001",
-                        "candidate_id": "C-1",
-                        "expert": ExpertFamily.MEMORY_BOUNDS.value,
                         "findings": [],
                     }
                 ]
@@ -139,6 +135,10 @@ class BatchedExpertProtocolTest(unittest.TestCase):
         self.assertEqual(2, results["minItems"])
         self.assertEqual(2, results["maxItems"])
         self.assertEqual(["T00001", "T00002"], task_id["enum"])
+        self.assertEqual(
+            {"task_id", "findings"},
+            set(results["items"]["properties"]),
+        )
 
     def test_all_full5_tasks_are_split_without_being_discarded(self) -> None:
         candidates = [candidate(index) for index in range(1, 5)]

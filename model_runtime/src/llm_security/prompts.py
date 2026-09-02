@@ -225,11 +225,6 @@ def batched_findings_schema(task_ids: list[str]) -> dict[str, Any]:
                                 "type": "string",
                                 "enum": allowed_task_ids,
                             },
-                            "candidate_id": {"type": "string"},
-                            "expert": {
-                                "type": "string",
-                                "enum": [family.value for family in ExpertFamily],
-                            },
                             "findings": {
                                 "type": "array",
                                 "items": finding_payload_schema(),
@@ -237,8 +232,6 @@ def batched_findings_schema(task_ids: list[str]) -> dict[str, Any]:
                         },
                         "required": [
                             "task_id",
-                            "candidate_id",
-                            "expert",
                             "findings",
                         ],
                         "additionalProperties": False,

@@ -368,10 +368,6 @@ class BatchedExpertRunner:
 
             candidate, expert = task_lookup[task_id]
             try:
-                if str(payload["candidate_id"]) != candidate.candidate_id:
-                    raise ValueError(f"Candidate mismatch for {task_id}")
-                if ExpertFamily(str(payload["expert"])) != expert:
-                    raise ValueError(f"Expert mismatch for {task_id}")
                 task_findings = payload.get("findings", [])
                 if not isinstance(task_findings, list):
                     raise TypeError(f"Findings for {task_id} must be a list")
