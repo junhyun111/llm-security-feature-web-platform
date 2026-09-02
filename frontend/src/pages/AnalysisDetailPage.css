@@ -439,3 +439,81 @@
     flex-direction: column;
   }
 }
+
+/* Analysis and patch are peer workflows. Findings is deliberately the default analysis view. */
+.work-mode-tabs {
+  width: fit-content;
+  min-height: 48px;
+  margin: 22px auto 0;
+  padding: 4px;
+  display: flex;
+  gap: 3px;
+  border: 1px solid #30363d;
+  border-radius: 8px 8px 0 0;
+  background: #161b22;
+}
+.work-mode-tabs button {
+  min-height: 38px;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 5px;
+  color: #8b949e;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+.work-mode-tabs button.active { color: #f0f6fc; background: #0d1117; box-shadow: inset 0 0 0 1px #30363d; }
+.work-mode-tabs button span { min-width: 16px; border-radius: 999px; color: #79c0ff; background: rgba(47,129,247,.14); font-size: 9px; text-align: center; }
+.work-mode-tabs + .detail-tabs { border-top: 0; }
+
+.findings-split-view { border: 1px solid #30363d; background: #0d1117; }
+.finding-summary-strip { min-height: 82px; padding: 0 22px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid #30363d; background: #161b22; }
+.finding-summary-strip > div { padding: 18px 20px; border-right: 1px solid #30363d; }
+.finding-summary-strip > div:last-child { border-right: 0; }
+.finding-summary-strip span, .finding-summary-strip strong { display: block; }
+.finding-summary-strip span { color: #8b949e; font-size: 10px; }
+.finding-summary-strip strong { margin-top: 5px; color: #e6edf3; font-size: 22px; }
+.finding-summary-strip .validated strong { color: #3fb950; }
+.finding-summary-strip .uncertain strong { color: #d29922; }
+.findings-split-content { min-height: 555px; display: grid; grid-template-columns: minmax(245px, 30%) minmax(0, 1fr); }
+.finding-navigation-list { padding: 8px; border-right: 1px solid #30363d; overflow: auto; }
+.finding-navigation-list button { width: 100%; padding: 13px 11px; display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; border-radius: 6px; color: #8b949e; background: transparent; cursor: pointer; text-align: left; }
+.finding-navigation-list button:hover, .finding-navigation-list button.active { background: #161b22; }
+.finding-navigation-list button.active { box-shadow: inset 2px 0 0 #2f81f7; }
+.finding-navigation-list button span { min-width: 0; display: grid; gap: 3px; }
+.finding-navigation-list b { overflow: hidden; color: #c9d1d9; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.finding-navigation-list strong { color: #f0b45b; font-size: 9px; }
+.finding-navigation-list small { color: #6e7681; font-family: "Cascadia Code", Consolas, monospace; font-size: 9px; }
+.verdict-mark { padding-top: 1px; font-size: 13px; }
+.verdict-mark.validated { color: #3fb950; }.verdict-mark.uncertain { color: #d29922; }.verdict-mark.rejected { color: #6e7681; }
+.finding-detail { padding: clamp(22px, 3vw, 42px); }
+.finding-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 21px; border-bottom: 1px solid #30363d; }
+.finding-detail-heading h2 { margin: 7px 0; color: #f0f6fc; font-size: clamp(22px, 3vw, 30px); letter-spacing: -.035em; }
+.finding-detail-heading code { color: #8b949e; font-family: "Cascadia Code", Consolas, monospace; font-size: 10px; }
+.finding-detail-field { margin-top: 22px; }
+.finding-detail-field h3 { margin: 0 0 7px; color: #8b949e; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.finding-detail-field p, .finding-detail-field ul { max-width: 760px; margin: 0; color: #c9d1d9; font-size: 12px; line-height: 1.7; }
+.finding-detail-field ul { padding-left: 18px; }
+.technical-disclosure { margin-top: 22px; border-top: 1px solid #30363d; border-bottom: 1px solid #30363d; }
+.technical-disclosure summary { padding: 14px 0; color: #8b949e; cursor: pointer; font-size: 11px; font-weight: 700; }
+.technical-disclosure[open] { padding-bottom: 17px; }
+.technical-disclosure .finding-detail-field { margin-top: 12px; }
+.finding-detail-actions { margin-top: 30px; display: flex; justify-content: flex-end; gap: 9px; }
+
+.patch-workspace { border: 1px solid #30363d; background: #0d1117; }
+.patch-workspace > header { padding: 22px; display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; border-bottom: 1px solid #30363d; background: #161b22; }
+.patch-workspace > header h2 { margin: 5px 0 6px; color: #f0f6fc; font-size: 18px; }.patch-workspace > header p { margin: 0; color: #8b949e; font-size: 11px; }
+.patch-workspace-content { min-height: 610px; display: grid; grid-template-columns: minmax(250px, 30%) minmax(0, 1fr); }
+.patch-target-list { padding: 8px; border-right: 1px solid #30363d; }
+.patch-target-list label { padding: 13px 10px; display: grid; grid-template-columns: 16px 17px minmax(0,1fr); align-items: start; gap: 7px; cursor: pointer; }
+.patch-target-list label:hover { background: #161b22; }.patch-target-list input { margin: 2px 0 0; accent-color: #2f81f7; }
+.patch-target-list label span { min-width: 0; display: grid; gap: 3px; }.patch-target-list strong { color: #f0b45b; font-size: 9px; }.patch-target-list b { overflow: hidden; color: #c9d1d9; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.patch-target-list small { color: #6e7681; font-family: "Cascadia Code", Consolas, monospace; font-size: 9px; }
+.patch-preview { min-width: 0; }.patch-preview .patch-diff-panel { min-height: 100%; border: 0; }.patch-preview .empty-workbench-panel { min-height: 100%; border: 0; }
+
+@media (max-width: 760px) {
+  .finding-summary-strip { padding: 0; grid-template-columns: 1fr 1fr; }.finding-summary-strip > div:nth-child(2) { border-right: 0; }.finding-summary-strip > div:nth-child(-n+2) { border-bottom: 1px solid #30363d; }
+  .findings-split-content, .patch-workspace-content { display: block; }.finding-navigation-list, .patch-target-list { max-height: 300px; border-right: 0; border-bottom: 1px solid #30363d; }.finding-detail { padding: 24px 19px; }.finding-detail-actions { justify-content: stretch; flex-direction: column; }.work-mode-tabs { width: 100%; }.work-mode-tabs button { flex: 1; justify-content: center; padding: 0 8px; }.patch-workspace > header { align-items: stretch; flex-direction: column; }
+}

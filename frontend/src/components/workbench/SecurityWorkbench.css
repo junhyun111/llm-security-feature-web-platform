@@ -9,8 +9,12 @@
 .security-workbench {
   min-height: 720px;
   display: grid;
-  grid-template-rows: 36px minmax(450px, 1fr) 220px;
+  grid-template-rows: 36px minmax(450px, 1fr) 36px;
   overflow: hidden;
+}
+
+.security-workbench.problems-open {
+  grid-template-rows: 36px minmax(450px, 1fr) 220px;
 }
 
 .workbench-topbar,
@@ -365,6 +369,11 @@
   accent-color: #2f81f7;
 }
 
+/* Patch selection belongs to the separate Patch workspace. */
+.inspector-patch-toggle,
+.inspector-composer { display: none !important; }
+.inspector-patch-button { width: 100%; margin-top: 14px; }
+
 .inspector-composer {
   margin: 0 14px 14px;
   padding-top: 14px;
@@ -382,6 +391,7 @@
 
 .workbench-problems {
   min-height: 0;
+  overflow: hidden;
   border-top: 1px solid #30363d;
   background: #0d1117;
 }
@@ -393,6 +403,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  cursor: pointer;
 }
 
 .problems-title {

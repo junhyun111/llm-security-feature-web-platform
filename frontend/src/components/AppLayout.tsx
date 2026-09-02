@@ -1,4 +1,5 @@
 import {
+  ChevronDown,
   FolderKanban,
   LayoutDashboard,
   LogOut,
@@ -6,12 +7,14 @@ import {
   Settings,
   ShieldCheck
 } from 'lucide-react'
+import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 
 export default function AppLayout() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
 
   const onLogout = async () => {
     await logout()
@@ -20,28 +23,33 @@ export default function AppLayout() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <header className="top-navigation">
         <div className="brand">
           <div className="brand-mark"><ShieldCheck size={21} /></div>
           <div><strong>LLM Security</strong><span>Code Review Platform</span></div>
         </div>
 
-        <nav className="nav-list">
-          <span className="nav-section-label">Workspace</span>
-          <NavLink to="/" end><LayoutDashboard size={17} /> Overview</NavLink>
-          <NavLink to="/analyses/new"><ScanSearch size={17} /> New Scan</NavLink>
-          <NavLink to="/analyses" end><FolderKanban size={17} /> Projects</NavLink>
-          <NavLink to="/settings"><Settings size={17} /> Settings</NavLink>
+        <nav className="nav-list" aria-label="Main navigation">
+          <NavLink to="/" end><LayoutDashboard size={16} /> Overview</NavLink>
+          <NavLink to="/analyses/new"><ScanSearch size={16} /> New Scan</NavLink>
+          <NavLink to="/analyses" end><FolderKanban size={16} /> Projects</NavLink>
+          <NavLink to="/settings"><Settings size={16} /> Settings</NavLink>
         </nav>
 
-        <div className="sidebar-bottom">
-          <div className="user-card">
+        <div className="top-navigation-user">
+          <button className="user-menu-trigger" onClick={() => setUserMenuOpen((open) => !open)} aria-expanded={userMenuOpen}>
             <div className="avatar">{(user?.displayName || user?.email || '?')[0].toUpperCase()}</div>
-            <div className="user-copy"><strong>{user?.displayName}</strong><span>{user?.email}</span></div>
-          </div>
-          <button className="ghost-button full" onClick={onLogout}><LogOut size={16} /> 로그아웃</button>
+            <span>{user?.displayName || user?.email}</span><ChevronDown size={14} />
+          </button>
+          {userMenuOpen && (
+            <div className="user-dropdown">
+              <strong>{user?.displayName || 'User'}</strong>
+              <span>{user?.email}</span>
+              <button onClick={onLogout}><LogOut size={15} /> 로그아웃</button>
+            </div>
+          )}
         </div>
-      </aside>
+      </header>
 
       <main className="main-area"><Outlet /></main>
     </div>

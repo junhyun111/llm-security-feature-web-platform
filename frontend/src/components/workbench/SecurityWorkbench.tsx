@@ -38,10 +38,11 @@ type WorkbenchProps = {
   analysis: AnalysisPayload
   activeFindingId: string | null
   onFindingSelect: (findingId: string) => void
-  selectedForPatch: Set<string>
-  onPatchToggle: (findingId: string, checked: boolean) => void
-  patchLocked: boolean
+  selectedForPatch?: Set<string>
+  onPatchToggle?: (findingId: string, checked: boolean) => void
+  patchLocked?: boolean
   patchComposer?: ReactNode
+  onGeneratePatch?: (findingId: string) => void
 }
 
 type FileTreeNode = {
@@ -56,10 +57,11 @@ export function SecurityWorkbench({
   analysis,
   activeFindingId,
   onFindingSelect,
-  selectedForPatch,
+  selectedForPatch = new Set<string>(),
   onPatchToggle,
-  patchLocked,
-  patchComposer
+  patchLocked = false,
+  patchComposer,
+  onGeneratePatch
 }: WorkbenchProps) {
   const [files, setFiles] = useState<ProjectFileSummary[]>([])
   const [file, setFile] = useState<ProjectFileContent | null>(null)
@@ -68,6 +70,7 @@ export function SecurityWorkbench({
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [editorRevision, setEditorRevision] = useState(0)
+  const [problemsOpen, setProblemsOpen] = useState(false)
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
   const monacoRef = useRef<Parameters<OnMount>[1] | null>(null)
 
@@ -177,7 +180,8 @@ export function SecurityWorkbench({
     const decorations = mountedEditor.createDecorationsCollection(
       fileFindings.map((bundle) => {
         const start = clampLine(bundle.finding.line_start, lineCount)
-        const end = clampLine(bundle.finding.line_end || start, lineCount)
+        // Large candidate ranges obscure the actual risky statement. Decorate at most three lines.
+        const end = Math.min(clampLine(bundle.finding.line_end || start, lineCount), start + 2)
         const active = bundle.finding.finding_id === activeFindingId
         return {
           range: new monaco.Range(start, 1, end, 1),
@@ -235,7 +239,7 @@ export function SecurityWorkbench({
   const tree = useMemo(() => buildTree(files), [files])
 
   return (
-    <section className="security-workbench" aria-label="보안 코드 워크벤치">
+    <section className={`security-workbench ${problemsOpen ? 'problems-open' : ''}`} aria-label="보안 코드 워크벤치">
       <div className="workbench-topbar">
         <div className="workbench-breadcrumb">
           <GitBranch size={14} />
@@ -316,7 +320,8 @@ export function SecurityWorkbench({
               bundle={activeFinding}
               selected={selectedForPatch.has(activeFinding.finding.finding_id)}
               patchLocked={patchLocked}
-              onPatchToggle={onPatchToggle}
+              onPatchToggle={onPatchToggle || (() => undefined)}
+              onGeneratePatch={onGeneratePatch}
             />
           ) : (
             <div className="inspector-empty">
@@ -328,11 +333,11 @@ export function SecurityWorkbench({
       </div>
 
       <div className="workbench-problems">
-        <div className="problems-toolbar">
+        <div className="problems-toolbar" onClick={() => setProblemsOpen((open) => !open)}>
           <div className="problems-title">
-            <AlertTriangle size={14} /> Problems <span>{findings.length}</span>
+            <AlertTriangle size={14} /> This file&apos;s findings <span>{fileFindings.length}</span>
           </div>
-          <label className="problems-search">
+          <label className="problems-search" onClick={(event) => event.stopPropagation()}>
             <Search size={13} />
             <input
               value={query}
@@ -422,12 +427,14 @@ function FindingInspector({
   bundle,
   selected,
   patchLocked,
-  onPatchToggle
+  onPatchToggle,
+  onGeneratePatch
 }: {
   bundle: FindingBundle
   selected: boolean
   patchLocked: boolean
   onPatchToggle: (findingId: string, checked: boolean) => void
+  onGeneratePatch?: (findingId: string) => void
 }) {
   const { finding, validation } = bundle
   const patchable = validation.verdict !== 'rejected'
@@ -478,6 +485,11 @@ function FindingInspector({
           />
           통합 패치에 포함{validation.verdict === 'uncertain' ? ' (생성 전 확인 필요)' : ''}
         </label>
+      )}
+      {onGeneratePatch && patchable && (
+        <button className="primary-button compact inspector-patch-button" onClick={() => onGeneratePatch(finding.finding_id)}>
+          <FileDiff size={14} /> Generate patch
+        </button>
       )}
     </div>
   )
