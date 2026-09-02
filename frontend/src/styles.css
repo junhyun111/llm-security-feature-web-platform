@@ -520,6 +520,7 @@ button {
 }
 
 .status-analyzing,
+.status-finalizing,
 .status-cancelling,
 .status-queued,
 .status-uploading,

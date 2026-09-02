@@ -133,9 +133,24 @@ public class AnalysisSyncService
                         job.AnalyzerJobId,
                         cancellationToken);
 
+                    // AnalysisJson is the user-visible source of truth. Validate and
+                    // commit it before attempting any denormalized DB projections.
+                    using (JsonDocument.Parse(analysisJson))
+                    {
+                    }
                     job.AnalysisJson = analysisJson;
-                    await ReplaceFindingsAsync(job, analysisJson, cancellationToken);
-                    await UpsertPatchBatchFromAnalysisAsync(job, analysisJson, cancellationToken);
+                    await _db.SaveChangesAsync(cancellationToken);
+
+                    await ProjectFindingsBestEffortAsync(
+                        job,
+                        analysisJson,
+                        cancellationToken);
+                    await ProjectPatchBatchBestEffortAsync(
+                        job,
+                        analysisJson,
+                        cancellationToken);
+
+                    return job;
                 }
                 catch (AnalyzerApiException error) when (
                     remote.Status == "cancelled" &&
@@ -149,6 +164,45 @@ public class AnalysisSyncService
 
         await _db.SaveChangesAsync(cancellationToken);
         return job;
+    }
+
+    private async Task ProjectFindingsBestEffortAsync(
+        AnalysisJob job,
+        string analysisJson,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ReplaceFindingsAsync(job, analysisJson, cancellationToken);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                error,
+                "Finding projection failed for analysis {AnalysisId}; the analysis JSON snapshot remains available",
+                job.Id);
+            _db.ChangeTracker.Clear();
+        }
+    }
+
+    private async Task ProjectPatchBatchBestEffortAsync(
+        AnalysisJob job,
+        string analysisJson,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await UpsertPatchBatchFromAnalysisAsync(job, analysisJson, cancellationToken);
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                error,
+                "Patch projection failed for analysis {AnalysisId}; the analysis JSON snapshot remains available",
+                job.Id);
+            _db.ChangeTracker.Clear();
+        }
     }
 
     private async Task<AnalysisSyncResult> StaleResultAsync(
@@ -249,49 +303,56 @@ public class AnalysisSyncService
         string analysisJson,
         CancellationToken cancellationToken)
     {
+        var projected = new List<AnalysisFinding>();
+        using (var doc = JsonDocument.Parse(analysisJson))
+        {
+            if (doc.RootElement.TryGetProperty("findings", out var findings) &&
+                findings.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var bundle in findings.EnumerateArray())
+                {
+                    if (!bundle.TryGetProperty("finding", out var finding))
+                        continue;
+
+                    bundle.TryGetProperty("validation", out var validation);
+
+                    var cwesJson = finding.TryGetProperty("cwes", out var cwes)
+                        ? cwes.GetRawText()
+                        : "[]";
+
+                    var expertsJson = finding.TryGetProperty("supporting_experts", out var experts)
+                        ? experts.GetRawText()
+                        : "[]";
+
+                    projected.Add(new AnalysisFinding
+                    {
+                        AnalysisJobId = job.Id,
+                        AnalyzerFindingId = GetString(finding, "finding_id"),
+                        Title = GetString(finding, "title"),
+                        FilePath = GetString(finding, "file"),
+                        LineStart = GetInt(finding, "line_start"),
+                        LineEnd = GetInt(finding, "line_end"),
+                        FunctionName = GetString(finding, "function"),
+                        RootCause = GetString(finding, "root_cause"),
+                        Consequence = GetString(finding, "consequence"),
+                        Verdict = GetString(validation, "verdict"),
+                        Confidence = GetDouble(validation, "confidence"),
+                        CwesJson = cwesJson,
+                        ExpertsJson = expertsJson
+                    });
+                }
+            }
+        }
+
         var existing = await _db.AnalysisFindings
             .Where(x => x.AnalysisJobId == job.Id)
             .ToListAsync(cancellationToken);
 
         _db.AnalysisFindings.RemoveRange(existing);
+        await _db.SaveChangesAsync(cancellationToken);
 
-        using var doc = JsonDocument.Parse(analysisJson);
-        if (!doc.RootElement.TryGetProperty("findings", out var findings) ||
-            findings.ValueKind != JsonValueKind.Array)
-            return;
-
-        foreach (var bundle in findings.EnumerateArray())
-        {
-            if (!bundle.TryGetProperty("finding", out var finding))
-                continue;
-
-            bundle.TryGetProperty("validation", out var validation);
-
-            var cwesJson = finding.TryGetProperty("cwes", out var cwes)
-                ? cwes.GetRawText()
-                : "[]";
-
-            var expertsJson = finding.TryGetProperty("supporting_experts", out var experts)
-                ? experts.GetRawText()
-                : "[]";
-
-            _db.AnalysisFindings.Add(new AnalysisFinding
-            {
-                AnalysisJobId = job.Id,
-                AnalyzerFindingId = GetString(finding, "finding_id"),
-                Title = GetString(finding, "title"),
-                FilePath = GetString(finding, "file"),
-                LineStart = GetInt(finding, "line_start"),
-                LineEnd = GetInt(finding, "line_end"),
-                FunctionName = GetString(finding, "function"),
-                RootCause = GetString(finding, "root_cause"),
-                Consequence = GetString(finding, "consequence"),
-                Verdict = GetString(validation, "verdict"),
-                Confidence = GetDouble(validation, "confidence"),
-                CwesJson = cwesJson,
-                ExpertsJson = expertsJson
-            });
-        }
+        _db.AnalysisFindings.AddRange(projected);
+        await _db.SaveChangesAsync(cancellationToken);
     }
 
     private async Task UpsertPatchBatchFromAnalysisAsync(

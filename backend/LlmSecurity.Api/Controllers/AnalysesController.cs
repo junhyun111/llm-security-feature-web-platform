@@ -182,7 +182,7 @@ public class AnalysesController : ApiControllerBase
         {
             sync = await _sync.TrySyncAsync(
                 job,
-                includeAnalysis: false,
+                includeAnalysis: true,
                 cancellationToken);
             job = sync.Job;
         }

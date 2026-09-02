@@ -50,6 +50,7 @@ export default function AnalysisDetailPage() {
   const [actionError, setActionError] = useState<UiError | null>(null)
   const [patchBusy, setPatchBusy] = useState(false)
   const [cancelBusy, setCancelBusy] = useState(false)
+  const [finalSyncBusy, setFinalSyncBusy] = useState(false)
   const consecutivePollFailures = useRef(0)
 
   const applyDetail = useCallback((result: AnalysisDetail) => {
@@ -84,7 +85,13 @@ export default function AnalysisDetailPage() {
 
   useEffect(() => {
     const status = detail?.job.status
-    if (!status || !['uploading', 'queued', 'analyzing', 'cancelling'].includes(status)) return
+    const analysisActive = ['uploading', 'queued', 'analyzing', 'cancelling'].includes(status || '')
+    const waitingForFinalResult = Boolean(
+      detail &&
+      ['completed', 'partial'].includes(status || '') &&
+      !detail.analysis
+    )
+    if (!status || (!analysisActive && !waitingForFinalResult)) return
 
     let disposed = false
     let timer: number | undefined
@@ -102,23 +109,28 @@ export default function AnalysisDetailPage() {
 
     const poll = async () => {
       try {
-        const result = await api.get<AnalysisStatus>(`/api/analyses/${id}/status`)
-        consecutivePollFailures.current = 0
-
-        if (['completed', 'partial', 'failed', 'cancelled'].includes(result.job.status)) {
-          try {
-            await refreshDetail()
-            consecutivePollFailures.current = 0
-          } catch (reason) {
-            recordPollFailure(reason)
-          }
+        if (waitingForFinalResult) {
+          await refreshDetail()
+          consecutivePollFailures.current = 0
         } else {
-          setDetail((current) => current ? {
-            ...current,
-            job: result.job,
-            sync: result.sync
-          } : current)
-          setPollError(syncWarning(result.sync))
+          const result = await api.get<AnalysisStatus>(`/api/analyses/${id}/status`)
+          consecutivePollFailures.current = 0
+
+          if (['completed', 'partial', 'failed', 'cancelled'].includes(result.job.status)) {
+            try {
+              await refreshDetail()
+              consecutivePollFailures.current = 0
+            } catch (reason) {
+              recordPollFailure(reason)
+            }
+          } else {
+            setDetail((current) => current ? {
+              ...current,
+              job: result.job,
+              sync: result.sync
+            } : current)
+            setPollError(syncWarning(result.sync))
+          }
         }
       } catch (reason) {
         recordPollFailure(reason)
@@ -132,7 +144,7 @@ export default function AnalysisDetailPage() {
       disposed = true
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [detail?.job.status, id, refreshDetail])
+  }, [detail?.analysis, detail?.job.status, id, refreshDetail])
 
   const findings = detail?.analysis?.findings ?? []
   const validated = useMemo(
@@ -210,6 +222,18 @@ export default function AnalysisDetailPage() {
     }
   }
 
+  const refreshFinalResult = async () => {
+    setFinalSyncBusy(true)
+    try {
+      await refreshDetail()
+      consecutivePollFailures.current = 0
+    } catch (reason) {
+      setPollError(toUiError(reason, '최종 분석 결과를 다시 불러오지 못했습니다.'))
+    } finally {
+      setFinalSyncBusy(false)
+    }
+  }
+
   if (!detail) {
     return (
       <div className="page">
@@ -223,6 +247,7 @@ export default function AnalysisDetailPage() {
 
   const { job, analysis } = detail
   const analysisActive = ['uploading', 'queued', 'analyzing', 'cancelling'].includes(job.status)
+  const waitingForFinalResult = ['completed', 'partial'].includes(job.status) && !analysis
   const patch = analysis?.patch_batch
   const patchLocked = patch?.status === 'approved'
   const patchComposer = !patchLocked ? (
@@ -260,7 +285,7 @@ export default function AnalysisDetailPage() {
           </p>
         </div>
         <div className="detail-actions">
-          <StatusBadge status={job.status} />
+          <StatusBadge status={waitingForFinalResult ? 'finalizing' : job.status} />
           {analysisActive && (
             <button className="danger-button compact" disabled={cancelBusy || job.status === 'cancelling'} onClick={cancelAnalysis}>
               <CircleStop size={15} /> {job.status === 'cancelling' ? '중단 요청됨' : cancelBusy ? '요청 중…' : '분석 중단'}
@@ -276,7 +301,7 @@ export default function AnalysisDetailPage() {
 
       {actionError && <ErrorMessage error={actionError} />}
 
-      {pollError && (
+      {pollError && !waitingForFinalResult && (
         <div className={`poll-warning${analysis && !analysisActive ? ' compact' : ''}`} role="status">
           <AlertTriangle size={16} />
           <div>
@@ -294,6 +319,20 @@ export default function AnalysisDetailPage() {
             <strong>{job.progress}%</strong>
           </div>
           <div className="progress-track"><div className="progress-fill" style={{ width: `${job.progress}%` }} /></div>
+        </section>
+      )}
+
+      {waitingForFinalResult && (
+        <section className="panel finalizing-panel">
+          <AlertTriangle />
+          <div>
+            <h2>최종 분석 결과를 불러오는 중입니다.</h2>
+            <p>분석 엔진은 완료되었습니다. 결과 스냅샷을 웹 저장소에 동기화하는 즉시 Overview, Code, Findings 화면이 열립니다.</p>
+            {pollError && <small>{pollError.message}{pollError.traceId ? ` · 오류 ID: ${pollError.traceId}` : ''}</small>}
+          </div>
+          <button className="secondary-button compact" disabled={finalSyncBusy} onClick={refreshFinalResult}>
+            {finalSyncBusy ? '불러오는 중…' : '다시 불러오기'}
+          </button>
         </section>
       )}
 

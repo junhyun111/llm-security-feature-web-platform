@@ -2,6 +2,7 @@ const labels: Record<string, string> = {
   uploading: '업로드 중',
   queued: '대기',
   analyzing: '분석 중',
+  finalizing: '결과 불러오는 중',
   cancelling: '중단 요청됨',
   completed: '완료',
   partial: '경고와 함께 완료',
