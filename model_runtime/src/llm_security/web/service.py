@@ -301,7 +301,7 @@ class WebJobService:
             raise RuntimeError(
                 "Patch generation calls OpenRouter; set RUN_PAID_EXPERIMENTS=1"
             )
-        config.runtime.max_retries = 0
+        config.runtime.max_retries = 3
         with self._lock:
             existing = self.get_patch_batch(job_id)
             if existing is not None:
@@ -752,7 +752,7 @@ class WebJobService:
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
         # A malformed provider response is not retried automatically. Distinct
         # bounded Expert batches are still sent as separate requests.
-        config.runtime.max_retries = 0
+        config.runtime.max_retries = 3
         progress(20, "Loading C/C++ source files")
         source_files = load_project_sources(
             input_directory,

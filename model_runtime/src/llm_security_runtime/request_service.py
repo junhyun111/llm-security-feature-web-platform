@@ -144,7 +144,7 @@ class RequestAwareWebJobService(WebJobService):
         config.analysis.backend = "semantic"
         config.candidate_gate.enabled = self.settings.candidate_gate_enabled
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
-        config.runtime.max_retries = 0
+        config.runtime.max_retries = 3
 
         progress(20, "Loading C/C++ source files")
         source_files = load_project_sources(
@@ -272,7 +272,7 @@ class RequestAwareWebJobService(WebJobService):
             router_validated=prior_options.router_validated,
         ))
 
-        config.runtime.max_retries = 0
+        config.runtime.max_retries = 3
 
         with self._lock:
             existing = self.get_patch_batch(job_id)
