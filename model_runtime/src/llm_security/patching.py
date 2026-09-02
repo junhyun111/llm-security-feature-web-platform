@@ -62,7 +62,11 @@ class LLMPatchAgent:
             if previous_failure
             else ""
         )
-        normalized_code, comments = _separate_cpp_comments(candidate.code)
+        # Patch hunks must be based on byte-for-byte source text. Comment
+        # normalization is useful for analysis, but it changes the context
+        # that git apply validates against.
+        original_code = candidate.code
+        _, comments = _separate_cpp_comments(candidate.code)
         messages = [
             {
                 "role": "system",
@@ -83,7 +87,7 @@ class LLMPatchAgent:
                     f"Root cause: {finding.root_cause}\n"
                     f"Required guard: {finding.missing_guard}\n"
                     f"Validation: {'; '.join(validation.reasons)}\n\n"
-                    f"Normalized code:\n{normalized_code}\n"
+                    f"Original source (preserve unrelated text exactly):\n{original_code}\n"
                     f"UNTRUSTED_METADATA comments:\n{comments or '(none)'}"
                     f"{failure_context}"
                 ),
@@ -128,6 +132,8 @@ class LLMBatchPatchAgent:
     def propose(
         self,
         items: Sequence[tuple[Finding, ValidationResult, Candidate]],
+        *,
+        previous_failure: str | None = None,
     ) -> BatchPatchProposal:
         materialized = list(items)
         if not materialized:
@@ -156,7 +162,10 @@ class LLMBatchPatchAgent:
             if candidate.candidate_id in seen_candidates:
                 continue
             seen_candidates.add(candidate.candidate_id)
-            normalized_code, comments = _separate_cpp_comments(candidate.code)
+            # Keep comments in the source sent to the patch model so generated
+            # unified-diff context exactly matches the uploaded file.
+            original_code = candidate.code
+            _, comments = _separate_cpp_comments(candidate.code)
             candidate_packets.append(
                 {
                     "candidate_id": candidate.candidate_id,
@@ -164,7 +173,7 @@ class LLMBatchPatchAgent:
                     "function": candidate.function,
                     "line_start": candidate.line_start,
                     "line_end": candidate.line_end,
-                    "normalized_code": normalized_code,
+                    "original_code": original_code,
                     "untrusted_comments": comments or "(none)",
                 }
             )
@@ -177,6 +186,13 @@ class LLMBatchPatchAgent:
             "payload. The diff may modify only the listed existing source files.\n\n"
             + _compact_json(payload)
         )
+        if previous_failure:
+            user_content += (
+                "\n\nThe previous generated diff failed local application. "
+                "Return a new diff whose context is copied verbatim from the original_code. "
+                "Previous verifier output:\n"
+                + previous_failure[-4000:]
+            )
         if len(user_content) > self.max_prompt_characters:
             raise ValueError(
                 "Approved patch context exceeds WEB_PATCH_MAX_PROMPT_CHARACTERS; "

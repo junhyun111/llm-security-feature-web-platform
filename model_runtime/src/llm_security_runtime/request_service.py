@@ -374,11 +374,28 @@ class RequestAwareWebJobService(WebJobService):
         approved_files = {finding.file for finding, _, _ in items}
         validate_patch_scope_for_files(proposal.unified_diff, approved_files)
 
-        verification = TemporaryPatchVerifier().verify(
+        verifier = TemporaryPatchVerifier()
+        verification = verifier.verify(
             self._job_dir(job_id) / "input",
             proposal,
             [],
         )
+        if (
+            not verification.patch_applied
+            and self.settings.patch_recovery_attempts > 0
+        ):
+            # A syntactically valid diff can still miss its source context. Give the
+            # model the real verifier output and ask for one corrected proposal.
+            proposal = proposal_agent.propose(
+                items,
+                previous_failure=verification.error or "patch context mismatch",
+            )
+            validate_patch_scope_for_files(proposal.unified_diff, approved_files)
+            verification = verifier.verify(
+                self._job_dir(job_id) / "input",
+                proposal,
+                [],
+            )
         if not verification.patch_applied:
             raise RuntimeError(
                 verification.error or "Generated patch could not be applied"

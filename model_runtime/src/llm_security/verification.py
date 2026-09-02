@@ -72,7 +72,10 @@ class TemporaryPatchVerifier:
                     patch_applied=False,
                     fully_verified=False,
                     steps=[apply_check],
-                    error="Generated diff could not be applied.",
+                    error=(
+                        "Generated diff could not be applied. "
+                        f"git apply --check: {apply_check.stderr[-2000:].strip()}"
+                    ),
                 )
             apply_step = self._run(
                 VerificationCommand(
@@ -84,7 +87,13 @@ class TemporaryPatchVerifier:
             )
             steps = [apply_check, apply_step]
             if not apply_step.passed:
-                return VerificationReport(False, False, steps, "Patch application failed.")
+                return VerificationReport(
+                    False,
+                    False,
+                    steps,
+                    "Patch application failed. "
+                    f"git apply: {apply_step.stderr[-2000:].strip()}",
+                )
             for command in commands:
                 result = self._run(command, workspace)
                 steps.append(result)
