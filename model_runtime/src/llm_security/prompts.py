@@ -136,8 +136,29 @@ def expert_messages(candidate: Candidate, context: ExpertContext) -> list[dict[s
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def findings_schema() -> dict[str, Any]:
-    finding = finding_payload_schema()
+_STRICT_FINDING_FIELDS = [
+    "title",
+    "root_cause",
+    "consequence",
+    "file",
+    "function",
+    "line_start",
+    "line_end",
+    "cwes",
+    "source",
+    "sink",
+    "missing_guard",
+    "trigger_path",
+    "evidence_ids",
+    "preconditions",
+    "evidence_for",
+    "falsification_test",
+    "confidence",
+]
+
+
+def findings_schema(*, best_effort: bool = False) -> dict[str, Any]:
+    finding = finding_payload_schema(best_effort=best_effort)
     return {
         "name": "security_findings",
         "strict": True,
@@ -150,7 +171,7 @@ def findings_schema() -> dict[str, Any]:
     }
 
 
-def finding_payload_schema() -> dict[str, Any]:
+def finding_payload_schema(*, best_effort: bool = False) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
@@ -172,25 +193,11 @@ def finding_payload_schema() -> dict[str, Any]:
             "falsification_test": {"type": ["string", "null"]},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         },
-        "required": [
-            "title",
-            "root_cause",
-            "consequence",
-            "file",
-            "function",
-            "line_start",
-            "line_end",
-            "cwes",
-            "source",
-            "sink",
-            "missing_guard",
-            "trigger_path",
-            "evidence_ids",
-            "preconditions",
-            "evidence_for",
-            "falsification_test",
-            "confidence",
-        ],
+        "required": (
+            ["title", "root_cause", "consequence", "confidence"]
+            if best_effort
+            else _STRICT_FINDING_FIELDS
+        ),
         "additionalProperties": False,
     }
 
@@ -315,7 +322,42 @@ def finding_from_payload(
     expert: ExpertFamily,
     model_id: str | None = None,
     prompt_version: str = "expert-v6-validator-counterevidence",
+    best_effort: bool = False,
 ) -> Finding:
+    if not isinstance(payload, dict):
+        raise TypeError("Finding payload must be an object")
+    if not best_effort:
+        missing = [name for name in _STRICT_FINDING_FIELDS if name not in payload]
+        if missing:
+            raise KeyError("Missing required finding fields: " + ", ".join(missing))
+
+    def text(name: str, fallback: str = "") -> str:
+        value = payload.get(name)
+        return fallback if value is None else str(value)
+
+    def optional_text(name: str) -> str | None:
+        value = payload.get(name)
+        return None if value is None or value == "" else str(value)
+
+    def string_list(name: str) -> list[str]:
+        value = payload.get(name, [])
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple, set)):
+            return [str(item) for item in value if item is not None]
+        return [str(value)]
+
+    def integer(name: str, fallback: int) -> int:
+        try:
+            return int(payload.get(name, fallback))
+        except (TypeError, ValueError):
+            return fallback
+
+    try:
+        confidence = float(payload.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+
     model_tag = (
         hashlib.sha256(model_id.encode("utf-8")).hexdigest()[:8]
         if model_id
@@ -325,31 +367,29 @@ def finding_from_payload(
         finding_id=f"F-{candidate.candidate_id}-{expert.value}-{model_tag}-{index}",
         candidate_id=candidate.candidate_id,
         expert=expert,
-        title=str(payload["title"]),
-        root_cause=str(payload["root_cause"]),
-        consequence=str(payload["consequence"]),
-        file=str(payload["file"]),
-        function=str(payload["function"]),
-        line_start=int(payload["line_start"]),
-        line_end=int(payload["line_end"]),
+        title=text("title", "Potential security issue"),
+        root_cause=text("root_cause", "Root cause was not supplied by the model."),
+        consequence=text("consequence", "Security impact requires validation."),
+        file=text("file", candidate.file),
+        function=text("function", candidate.function),
+        line_start=integer("line_start", candidate.line_start),
+        line_end=integer("line_end", candidate.line_end),
         cwes=list(
             dict.fromkeys(
                 normalized
-                for item in payload["cwes"]
+                for item in string_list("cwes")
                 for normalized in [normalize_cwe(str(item))]
                 if normalized
             )
         ),
-        source=None if payload["source"] is None else str(payload["source"]),
-        sink=None if payload["sink"] is None else str(payload["sink"]),
-        missing_guard=(
-            None if payload["missing_guard"] is None else str(payload["missing_guard"])
-        ),
-        trigger_path=[str(item) for item in payload["trigger_path"]],
-        evidence_ids=[str(item) for item in payload["evidence_ids"]],
-        confidence=max(0.0, min(1.0, float(payload["confidence"]))),
-        preconditions=[str(item) for item in payload.get("preconditions", [])],
-        evidence_for=[str(item) for item in payload.get("evidence_for", [])],
+        source=optional_text("source"),
+        sink=optional_text("sink"),
+        missing_guard=optional_text("missing_guard"),
+        trigger_path=string_list("trigger_path"),
+        evidence_ids=string_list("evidence_ids"),
+        confidence=max(0.0, min(1.0, confidence)),
+        preconditions=string_list("preconditions"),
+        evidence_for=string_list("evidence_for"),
         evidence_against=[],
         falsification_test=(
             None

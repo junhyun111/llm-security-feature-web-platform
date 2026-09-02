@@ -430,7 +430,7 @@ function FindingInspector({
   onPatchToggle: (findingId: string, checked: boolean) => void
 }) {
   const { finding, validation } = bundle
-  const validated = validation.verdict === 'validated'
+  const patchable = validation.verdict !== 'rejected'
   return (
     <div className="finding-inspector-body">
       <div className="inspector-heading">
@@ -468,7 +468,7 @@ function FindingInspector({
         <ValidationChecks checks={validation.checks} compact />
       )}
 
-      {validated && (
+      {patchable && (
         <label className="inspector-patch-toggle">
           <input
             type="checkbox"
@@ -476,7 +476,7 @@ function FindingInspector({
             disabled={patchLocked}
             onChange={(event) => onPatchToggle(finding.finding_id, event.target.checked)}
           />
-          통합 패치에 포함
+          통합 패치에 포함{validation.verdict === 'uncertain' ? ' (생성 전 확인 필요)' : ''}
         </label>
       )}
     </div>
@@ -621,6 +621,8 @@ export function PatchDiffPanel({
 
 export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) {
   const routes = analysis.routes || []
+  const expertFailures = analysis.expert_failures || []
+  const recoveredFailures = expertFailures.filter((item) => item.recovered)
   const [selectedId, setSelectedId] = useState(routes[0]?.candidate_id || '')
   const route = routes.find((item) => item.candidate_id === selectedId) || routes[0]
   const routeBundles = analysis.findings.filter(
@@ -640,6 +642,7 @@ export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) 
           <span>Candidates <strong>{analysis.summary.candidate_count}</strong></span>
           <span>Expert tasks <strong>{analysis.summary.completed_expert_task_count ?? analysis.summary.submitted_expert_task_count}/{analysis.summary.expert_task_count ?? analysis.summary.submitted_expert_task_count}</strong></span>
           <span>Failed <strong>{analysis.summary.failed_expert_task_count ?? 0}</strong></span>
+          <span>Recovered <strong>{analysis.summary.recovered_expert_task_count ?? recoveredFailures.length}</strong></span>
           <span>Concurrency <strong>{analysis.summary.max_concurrent_expert_requests ?? '—'}</strong></span>
           <span>Requests <strong>{analysis.summary.request_count}</strong></span>
           <span>Errors <strong>{analysis.errors?.length || 0}</strong></span>
@@ -650,6 +653,32 @@ export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) 
         <details className="trace-errors" open>
           <summary>Pipeline errors ({analysis.errors?.length})</summary>
           <ul>{analysis.errors?.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul>
+        </details>
+      )}
+
+      {expertFailures.length > 0 && (
+        <details className="trace-errors expert-failure-details">
+          <summary>
+            Expert 작업 기록 ({expertFailures.length}) · 복구 {recoveredFailures.length}
+          </summary>
+          <ul className="expert-failure-list">
+            {expertFailures.map((failure) => (
+              <li key={`${failure.task_id}-${failure.attempts}`}>
+                <div>
+                  <strong>{failure.task_id} · {failure.expert}</strong>
+                  <span className={failure.recovered ? 'recovered' : 'unresolved'}>
+                    {failure.recovered ? '복구됨' : failure.code}
+                  </span>
+                </div>
+                <small>
+                  Candidate {failure.candidate_id} · {failure.model}
+                  {failure.provider ? ` · provider ${failure.provider}` : ''}
+                  {` · 시도 ${failure.attempts}회`}
+                </small>
+                <p>{failure.message}</p>
+              </li>
+            ))}
+          </ul>
         </details>
       )}
 

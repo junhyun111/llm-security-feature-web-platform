@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import unittest
 from unittest.mock import patch
 
@@ -44,7 +45,7 @@ class FakeHttpClient:
         return None
 
     def post(self, *args, **kwargs) -> FakeResponse:
-        self.calls.append(kwargs)
+        self.calls.append(copy.deepcopy(kwargs))
         response = self.responses[self.call_count]
         self.call_count += 1
         if isinstance(response, Exception):
@@ -175,6 +176,74 @@ class OpenRouterRetryTest(unittest.TestCase):
             {"effort": "none", "exclude": True},
             body["reasoning"],
         )
+
+    def test_web_json_repair_accepts_fenced_json_with_trailing_comma(self) -> None:
+        repaired = success_response()
+        repaired.payload["choices"][0]["message"]["content"] = (
+            '```json\n{"findings": [],}\n```'
+        )
+        transport = FakeHttpClient([repaired])
+        client = OpenRouterClient(
+            api_key="test-key",
+            max_retries=0,
+            json_repair=True,
+        )
+
+        with patch("llm_security.llm.httpx.Client", return_value=transport):
+            response = self.complete(client)
+
+        self.assertEqual({"findings": []}, response.data)
+
+    def test_structured_output_rejection_falls_back_to_prompt_schema(self) -> None:
+        transport = FakeHttpClient([
+            FakeResponse(
+                400,
+                text="response_format json_schema is an unsupported parameter",
+            ),
+            success_response(),
+        ])
+        client = OpenRouterClient(
+            api_key="test-key",
+            max_retries=0,
+            structured_output_fallback=True,
+        )
+
+        with patch("llm_security.llm.httpx.Client", return_value=transport):
+            response = self.complete(client)
+
+        self.assertEqual({"findings": []}, response.data)
+        self.assertIn("response_format", transport.calls[0]["json"])
+        self.assertNotIn("response_format", transport.calls[1]["json"])
+        self.assertFalse(
+            transport.calls[1]["json"]["provider"]["require_parameters"]
+        )
+        self.assertIn(
+            "Return only a JSON object matching this JSON Schema",
+            transport.calls[1]["json"]["messages"][-1]["content"],
+        )
+
+    def test_format_fallback_does_not_consume_transport_retry_budget(self) -> None:
+        transport = FakeHttpClient([
+            FakeResponse(400, text="response_format json_schema unsupported"),
+            FakeResponse(429, text="rate limited"),
+            success_response(),
+        ])
+        client = OpenRouterClient(
+            api_key="test-key",
+            max_retries=1,
+            structured_output_fallback=True,
+        )
+
+        with (
+            patch("llm_security.llm.httpx.Client", return_value=transport),
+            patch("llm_security.llm.time.sleep") as sleep,
+            patch("llm_security.llm.random.uniform", return_value=0.0),
+        ):
+            response = self.complete(client)
+
+        self.assertEqual({"findings": []}, response.data)
+        self.assertEqual(3, transport.call_count)
+        sleep.assert_called_once_with(0.5)
 
 
 if __name__ == "__main__":

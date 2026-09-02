@@ -152,6 +152,9 @@ ALLOWED_HOSTS=security.example.com
 
 # Candidate × Expert별 독립 요청의 동시 실행 상한(최대 100)
 WEB_MAX_CONCURRENT_EXPERT_REQUESTS=20
+WEB_EXPERT_RECOVERY_ATTEMPTS=1
+# 최초 생성 이후 허용할 패치 재생성 횟수
+WEB_MAX_PATCH_REGENERATIONS=5
 
 # Expert 요청 한 건당 설정
 WEB_DETECTION_MAX_OUTPUT_TOKENS=16384
@@ -169,6 +172,9 @@ OPENROUTER_PROVIDER_IGNORE=baidu
 `WEB_MAX_CONCURRENT_EXPERT_REQUESTS`를 10~20부터 시작해 조정하십시오.
 `MAX_RETRIES=1`은 최초 요청을 포함한 총 1회가 아니라, 최초 요청 실패 후 일시적
 오류(429, 5xx, 네트워크 오류)에 한해 한 번 더 시도한다는 뜻입니다.
+`WEB_EXPERT_RECOVERY_ATTEMPTS=1`은 transport retry 이후에도 실패한 Expert
+작업만 별도 복구 큐에서 한 번 재실행합니다. 웹 분석은 성공한 결과를 보존하며,
+일부 작업이 끝내 실패하더라도 가능한 보고서를 `partial` 상태로 제공합니다.
 
 인터넷에 공개할 때는 Caddy, Nginx 또는 클라우드 로드 밸런서에서 HTTPS를 적용한 뒤 8080 포트로 프록시해야 합니다. 사용자 API Key가 전송되므로 평문 HTTP 공개 배포는 사용하지 마십시오.
 

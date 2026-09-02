@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+import re
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Callable
 
 from .evidence import ContextBuilder
@@ -27,6 +29,35 @@ class AnalysisCancelled(RuntimeError):
     """Raised when an authenticated user cancels an in-flight analysis."""
 
 
+class ExpertFailureCode(str, Enum):
+    RATE_LIMIT = "RATE_LIMIT"
+    PROVIDER_ERROR = "PROVIDER_ERROR"
+    AUTHENTICATION_ERROR = "AUTHENTICATION_ERROR"
+    READ_TIMEOUT = "READ_TIMEOUT"
+    HARD_TIMEOUT = "HARD_TIMEOUT"
+    INVALID_JSON = "INVALID_JSON"
+    SCHEMA_ERROR = "SCHEMA_ERROR"
+    NO_FINAL_CONTENT = "NO_FINAL_CONTENT"
+    OUTPUT_LIMIT = "OUTPUT_LIMIT"
+    REASONING_BUDGET_EXHAUSTED = "REASONING_BUDGET_EXHAUSTED"
+    CANCELLED = "CANCELLED"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(slots=True)
+class ExpertTaskFailure:
+    task_id: str
+    candidate_id: str
+    expert: str
+    model: str
+    provider: str | None
+    code: ExpertFailureCode
+    recoverable: bool
+    recovered: bool
+    attempts: int
+    message: str
+
+
 @dataclass(slots=True)
 class ExpertRunOutput:
     findings: list[Finding]
@@ -38,6 +69,11 @@ class ExpertRunOutput:
     failed_task_count: int = 0
     incomplete_candidate_count: int = 0
     skipped_task_count: int = 0
+    recovered_task_count: int = 0
+    timed_out_task_count: int = 0
+    covered_candidate_count: int = 0
+    cancelled: bool = False
+    failures: list[ExpertTaskFailure] = field(default_factory=list)
 
 
 class ExpertRunner:
@@ -146,6 +182,8 @@ class ExpertProgress:
     total_task_count: int
     active_request_count: int
     max_concurrency: int
+    recovery_task_count: int = 0
+    recovered_task_count: int = 0
 
 
 class ParallelExpertRunner:
@@ -161,6 +199,7 @@ class ParallelExpertRunner:
         *,
         models_by_family: dict[ExpertFamily, str] | None = None,
         max_concurrency: int = 100,
+        recovery_attempts: int = 0,
         progress_callback: Callable[[ExpertProgress], None] | None = None,
         cancel_callback: Callable[[], bool] | None = None,
     ) -> None:
@@ -171,6 +210,7 @@ class ParallelExpertRunner:
         self.context_builder = context_builder
         self.models_by_family = dict(models_by_family or {})
         self.max_concurrency = min(100, max_concurrency)
+        self.recovery_attempts = max(0, min(2, recovery_attempts))
         self.progress_callback = progress_callback
         self.cancel_callback = cancel_callback
 
@@ -189,7 +229,7 @@ class ParallelExpertRunner:
             return ExpertRunOutput(findings=[], usage=[], errors=[])
 
         results: dict[str, ExpertTaskResult] = {}
-        errors: dict[str, str] = {}
+        failures: dict[str, ExpertTaskFailure] = {}
         successful_candidates: set[str] = set()
         successful = 0
         failed = 0
@@ -204,57 +244,177 @@ class ParallelExpertRunner:
             thread_name_prefix="expert-request",
         )
         cancelled = False
+        accounted_task_ids: set[str] = set()
         try:
             futures = {
                 executor.submit(self._run_task, task): task
                 for task in tasks
             }
-            for future in as_completed(futures):
+            pending = set(futures)
+            while pending:
                 if self._is_cancelled():
                     cancelled = True
-                    for pending in futures:
-                        pending.cancel()
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    raise AnalysisCancelled("Analysis cancellation requested")
-                task = futures[future]
-                try:
-                    result = future.result()
-                except AnalysisCancelled:
-                    cancelled = True
-                    for pending in futures:
-                        pending.cancel()
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    raise
-                except Exception as error:  # isolate one remote Expert failure
-                    failed += 1
-                    errors[task.task_id] = (
-                        f"{task.task_id}/{task.candidate.candidate_id}/"
-                        f"{task.assignment.expert.value}/"
-                        f"{task.assignment.model_id}: {error}"
-                    )
+                    ready = {future for future in pending if future.done()}
+                    pending -= ready
                 else:
-                    successful += 1
-                    results[task.task_id] = result
-                    successful_candidates.add(result.candidate_id)
+                    ready, pending = wait(
+                        pending,
+                        timeout=0.25,
+                        return_when=FIRST_COMPLETED,
+                    )
+                for future in ready:
+                    task = futures[future]
+                    try:
+                        result = future.result()
+                    except AnalysisCancelled:
+                        cancelled = True
+                        continue
+                    except Exception as error:  # isolate one remote Expert failure
+                        failed += 1
+                        failures[task.task_id] = _task_failure(task, error)
+                    else:
+                        successful += 1
+                        results[task.task_id] = result
+                        successful_candidates.add(result.candidate_id)
+                    accounted_task_ids.add(task.task_id)
+                    finished += 1
 
-                finished += 1
-                active = sum(
-                    pending.running()
-                    for pending in futures
+                if ready:
+                    active = sum(future.running() for future in pending)
+                    self._notify_progress(
+                        ExpertProgress(
+                            finished,
+                            successful,
+                            failed,
+                            total,
+                            active,
+                            self.max_concurrency,
+                        )
+                    )
+                if cancelled:
+                    break
+        finally:
+            if cancelled:
+                for future in futures:
+                    future.cancel()
+                executor.shutdown(wait=False, cancel_futures=True)
+            else:
+                executor.shutdown(wait=True)
+
+        if cancelled:
+            for task in tasks:
+                if task.task_id in accounted_task_ids:
+                    continue
+                failures[task.task_id] = ExpertTaskFailure(
+                    task_id=task.task_id,
+                    candidate_id=task.candidate.candidate_id,
+                    expert=task.assignment.expert.value,
+                    model=task.assignment.model_id,
+                    provider=None,
+                    code=ExpertFailureCode.CANCELLED,
+                    recoverable=False,
+                    recovered=False,
+                    attempts=0,
+                    message="Cancelled before a result was collected",
                 )
+
+        recovered = 0
+        if not cancelled and self.recovery_attempts:
+            for _ in range(self.recovery_attempts):
+                recovery_tasks = [
+                    task
+                    for task in tasks
+                    if task.task_id in failures
+                    and not failures[task.task_id].recovered
+                    and failures[task.task_id].recoverable
+                ]
+                if not recovery_tasks:
+                    break
+                recovery_workers = min(self.max_concurrency, len(recovery_tasks))
                 self._notify_progress(
                     ExpertProgress(
                         finished,
                         successful,
                         failed,
                         total,
-                        active,
+                        recovery_workers,
                         self.max_concurrency,
+                        len(recovery_tasks),
+                        recovered,
                     )
                 )
-        finally:
-            if not cancelled:
-                executor.shutdown(wait=True)
+                recovery_executor = ThreadPoolExecutor(
+                    max_workers=recovery_workers,
+                    thread_name_prefix="expert-recovery",
+                )
+                try:
+                    recovery_futures = {
+                        recovery_executor.submit(
+                            self._run_task,
+                            task,
+                            failures[task.task_id].provider,
+                        ): task
+                        for task in recovery_tasks
+                    }
+                    recovery_pending = set(recovery_futures)
+                    while recovery_pending:
+                        if self._is_cancelled():
+                            cancelled = True
+                            break
+                        ready, recovery_pending = wait(
+                            recovery_pending,
+                            timeout=0.25,
+                            return_when=FIRST_COMPLETED,
+                        )
+                        for future in ready:
+                            task = recovery_futures[future]
+                            try:
+                                result = future.result()
+                            except AnalysisCancelled:
+                                cancelled = True
+                                continue
+                            except Exception as error:
+                                previous = failures[task.task_id]
+                                current = _task_failure(task, error)
+                                current.attempts = previous.attempts + 1
+                                failures[task.task_id] = current
+                            else:
+                                previous = failures[task.task_id]
+                                previous.recovered = True
+                                previous.attempts += 1
+                                results[task.task_id] = result
+                                successful_candidates.add(result.candidate_id)
+                                successful += 1
+                                failed -= 1
+                                recovered += 1
+
+                        if ready:
+                            active = sum(
+                                future.running() for future in recovery_pending
+                            )
+                            self._notify_progress(
+                                ExpertProgress(
+                                    finished,
+                                    successful,
+                                    failed,
+                                    total,
+                                    active,
+                                    self.max_concurrency,
+                                    len(recovery_tasks),
+                                    recovered,
+                                )
+                            )
+                        if cancelled:
+                            break
+                finally:
+                    if cancelled:
+                        for future in recovery_futures:
+                            future.cancel()
+                        recovery_executor.shutdown(wait=False, cancel_futures=True)
+                    else:
+                        recovery_executor.shutdown(wait=True)
+                if cancelled:
+                    break
 
         findings: list[Finding] = []
         usage: list[UsageRecord] = []
@@ -265,8 +425,30 @@ class ParallelExpertRunner:
             if result is not None:
                 findings.extend(result.findings)
                 usage.append(result.usage)
-            elif task.task_id in errors:
-                ordered_errors.append(errors[task.task_id])
+            elif (
+                task.task_id in failures
+                and failures[task.task_id].code != ExpertFailureCode.CANCELLED
+            ):
+                failure = failures[task.task_id]
+                ordered_errors.append(
+                    f"{failure.task_id}/{failure.candidate_id}/"
+                    f"{failure.expert}/{failure.model} [{failure.code.value}]: "
+                    f"{failure.message}"
+                )
+
+        ordered_failures = [
+            failures[task.task_id]
+            for task in tasks
+            if task.task_id in failures
+        ]
+        timed_out = sum(
+            failure.code in {
+                ExpertFailureCode.READ_TIMEOUT,
+                ExpertFailureCode.HARD_TIMEOUT,
+            }
+            and not failure.recovered
+            for failure in ordered_failures
+        )
 
         return ExpertRunOutput(
             findings=findings,
@@ -279,7 +461,15 @@ class ParallelExpertRunner:
             incomplete_candidate_count=len(
                 candidate_ids - successful_candidates
             ),
-            skipped_task_count=0,
+            skipped_task_count=sum(
+                failure.code == ExpertFailureCode.CANCELLED
+                for failure in ordered_failures
+            ),
+            recovered_task_count=recovered,
+            timed_out_task_count=timed_out,
+            covered_candidate_count=len(successful_candidates),
+            cancelled=cancelled,
+            failures=ordered_failures,
         )
 
     def _build_tasks(
@@ -337,7 +527,11 @@ class ParallelExpertRunner:
             for index, (candidate, expert) in enumerate(ordered, start=1)
         ]
 
-    def _run_task(self, task: ExpertTask) -> ExpertTaskResult:
+    def _run_task(
+        self,
+        task: ExpertTask,
+        excluded_provider: str | None = None,
+    ) -> ExpertTaskResult:
         self._raise_if_cancelled()
         candidate = task.candidate
         assignment = task.assignment
@@ -346,15 +540,15 @@ class ParallelExpertRunner:
         response = self.client.complete(
             model=assignment.model_id,
             messages=expert_messages(candidate, context),
-            response_schema=findings_schema(),
+            response_schema=findings_schema(best_effort=True),
             metadata={
                 "task": "expert",
                 "task_id": task.task_id,
                 "candidate_id": candidate.candidate_id,
                 "expert": expert.value,
+                "exclude_provider": excluded_provider,
             },
         )
-        self._raise_if_cancelled()
         payloads = response.data.get("findings", [])
         if not isinstance(payloads, list):
             raise TypeError("The model response 'findings' field must be a list")
@@ -366,6 +560,7 @@ class ParallelExpertRunner:
                 expert=expert,
                 model_id=response.usage.model,
                 prompt_version=assignment.prompt_version,
+                best_effort=True,
             )
             for index, payload in enumerate(payloads, start=1)
         ]
@@ -391,6 +586,70 @@ class ParallelExpertRunner:
     def _raise_if_cancelled(self) -> None:
         if self._is_cancelled():
             raise AnalysisCancelled("Analysis cancellation requested")
+
+
+def _task_failure(task: ExpertTask, error: Exception) -> ExpertTaskFailure:
+    message = str(error)
+    lowered = message.lower()
+    provider_match = re.search(r"provider=([^,\s)]+)", message, re.IGNORECASE)
+    if provider_match is None:
+        provider_match = re.search(
+            r'["\']provider_name["\']\s*:\s*["\']([^"\']+)',
+            message,
+            re.IGNORECASE,
+        )
+    provider = provider_match.group(1) if provider_match else None
+
+    if "http 401" in lowered or "http 403" in lowered:
+        code = ExpertFailureCode.AUTHENTICATION_ERROR
+        recoverable = False
+    elif "http 429" in lowered or "rate limit" in lowered:
+        code = ExpertFailureCode.RATE_LIMIT
+        recoverable = True
+    elif (
+        "no final content" in lowered
+        and (reasoning_match := re.search(r"reasoning_tokens=(\d+)", lowered))
+        and int(reasoning_match.group(1)) > 0
+    ):
+        code = ExpertFailureCode.REASONING_BUDGET_EXHAUSTED
+        recoverable = True
+    elif "no final content" in lowered:
+        code = ExpertFailureCode.NO_FINAL_CONTENT
+        recoverable = True
+    elif "finish_reason=length" in lowered or "output-token" in lowered:
+        code = ExpertFailureCode.OUTPUT_LIMIT
+        recoverable = True
+    elif "invalid json" in lowered or "incomplete" in lowered:
+        code = ExpertFailureCode.INVALID_JSON
+        recoverable = True
+    elif "schema" in lowered or isinstance(error, (KeyError, TypeError, ValueError)):
+        code = ExpertFailureCode.SCHEMA_ERROR
+        recoverable = True
+    elif "hard timeout" in lowered:
+        code = ExpertFailureCode.HARD_TIMEOUT
+        recoverable = True
+    elif "timeout" in lowered or "timed out" in lowered:
+        code = ExpertFailureCode.READ_TIMEOUT
+        recoverable = True
+    elif "http 5" in lowered or "provider" in lowered:
+        code = ExpertFailureCode.PROVIDER_ERROR
+        recoverable = True
+    else:
+        code = ExpertFailureCode.UNKNOWN
+        recoverable = True
+
+    return ExpertTaskFailure(
+        task_id=task.task_id,
+        candidate_id=task.candidate.candidate_id,
+        expert=task.assignment.expert.value,
+        model=task.assignment.model_id,
+        provider=provider,
+        code=code,
+        recoverable=recoverable,
+        recovered=False,
+        attempts=1,
+        message=message[:2000],
+    )
 
 
 @dataclass(slots=True)

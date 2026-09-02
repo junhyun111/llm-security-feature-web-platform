@@ -121,19 +121,29 @@ public class AnalysisSyncService
         job.ErrorMessage = remote.Error;
         job.UpdatedAt = DateTime.UtcNow;
 
-        if (remote.Status is "completed" or "partial")
+        if (remote.Status is "completed" or "partial" or "cancelled")
         {
             job.CompletedAt ??= DateTime.UtcNow;
 
             if (includeAnalysis)
             {
-                var analysisJson = await _analyzer.GetAnalysisJsonAsync(
-                    job.AnalyzerJobId,
-                    cancellationToken);
+                try
+                {
+                    var analysisJson = await _analyzer.GetAnalysisJsonAsync(
+                        job.AnalyzerJobId,
+                        cancellationToken);
 
-                job.AnalysisJson = analysisJson;
-                await ReplaceFindingsAsync(job, analysisJson, cancellationToken);
-                await UpsertPatchBatchFromAnalysisAsync(job, analysisJson, cancellationToken);
+                    job.AnalysisJson = analysisJson;
+                    await ReplaceFindingsAsync(job, analysisJson, cancellationToken);
+                    await UpsertPatchBatchFromAnalysisAsync(job, analysisJson, cancellationToken);
+                }
+                catch (AnalyzerApiException error) when (
+                    remote.Status == "cancelled" &&
+                    error.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.NotFound)
+                {
+                    // Cancellation before the Expert phase has no partial report.
+                    // Persist the terminal job state without treating that as a sync failure.
+                }
             }
         }
 

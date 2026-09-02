@@ -137,6 +137,7 @@ export type PatchBatch = {
   status: string
   summary: string
   unified_diff: string
+  revision?: number
 }
 
 export type AnalysisPayload = {
@@ -151,18 +152,38 @@ export type AnalysisPayload = {
     submitted_expert_task_count: number
     completed_expert_task_count?: number
     failed_expert_task_count?: number
+    recovered_expert_task_count?: number
+    timed_out_expert_task_count?: number
     incomplete_candidate_count?: number
+    covered_candidate_count?: number
     skipped_expert_task_count?: number
     expert_task_count?: number
     max_concurrent_expert_requests?: number
     pre_gate_candidate_count?: number
     structural_rejected_count?: number
+    skipped_source_file_count?: number
+    expert_task_coverage?: number
+    candidate_coverage?: number
+    degraded?: boolean
+    cancelled?: boolean
   }
   findings: FindingBundle[]
   routes?: RouteDecision[]
   structural_validations?: ValidationResult[]
   usage?: UsageRecord[]
   errors?: string[]
+  expert_failures?: Array<{
+    task_id: string
+    candidate_id: string
+    expert: string
+    model: string
+    provider?: string | null
+    code: string
+    recoverable: boolean
+    recovered: boolean
+    attempts: number
+    message: string
+  }>
   patch_batch?: PatchBatch | null
 }
 

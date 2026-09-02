@@ -36,6 +36,8 @@ def build_openrouter_client(config: AppConfig) -> OpenRouterClient:
         require_parameters=config.model.require_parameters,
         allow_fallbacks=config.model.allow_fallbacks,
         structured_output=config.model.structured_output,
+        json_repair=config.model.json_repair,
+        structured_output_fallback=config.model.structured_output_fallback,
     )
 
 
@@ -187,11 +189,14 @@ def build_parallel_web_pipeline(
     router: Router,
     *,
     max_concurrency: int,
+    recovery_attempts: int = 1,
     progress_callback: Callable[[ExpertProgress], None] | None = None,
     cancel_callback: Callable[[], bool] | None = None,
 ) -> VulnerabilityPipeline:
     """Build the production web pipeline with one request per logical Expert."""
 
+    config.model.json_repair = True
+    config.model.structured_output_fallback = True
     client = build_openrouter_client(config)
     if isinstance(router, BudgetedUtilityRouter):
         trained_models = {
@@ -216,6 +221,7 @@ def build_parallel_web_pipeline(
             context_builder=build_context_builder(config),
             models_by_family=config.model.expert_models,
             max_concurrency=max_concurrency,
+            recovery_attempts=recovery_attempts,
             progress_callback=progress_callback,
             cancel_callback=cancel_callback,
         ),

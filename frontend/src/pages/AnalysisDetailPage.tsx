@@ -155,6 +155,13 @@ export default function AnalysisDetailPage() {
       setActionError({ message: '설정 탭에서 패치 생성에 사용할 OpenRouter API Key를 저장해 주세요.' })
       return
     }
+    const containsUncertain = findings.some((item) =>
+      selected.has(item.finding.finding_id) &&
+      item.validation.verdict === 'uncertain'
+    )
+    if (containsUncertain && !window.confirm(
+      '선택한 항목 중 아직 완전히 검증되지 않은 Finding이 있습니다. 그래도 패치를 생성할까요?'
+    )) return
     setPatchBusy(true)
     setActionError(null)
     try {
@@ -217,7 +224,8 @@ export default function AnalysisDetailPage() {
   const { job, analysis } = detail
   const analysisActive = ['uploading', 'queued', 'analyzing', 'cancelling'].includes(job.status)
   const patch = analysis?.patch_batch
-  const patchComposer = !patch ? (
+  const patchLocked = patch?.status === 'approved'
+  const patchComposer = !patchLocked ? (
     <div className="patch-generation-actions">
       <button
         className="primary-button compact"
@@ -225,10 +233,14 @@ export default function AnalysisDetailPage() {
         onClick={proposePatch}
       >
         <WandSparkles size={15} />
-        {patchBusy ? '생성 중…' : `통합 패치 생성 (${selected.size})`}
+        {patchBusy
+          ? '생성 중…'
+          : patch
+            ? `패치 재생성 v${(patch.revision ?? 1) + 1} (${selected.size})`
+            : `통합 패치 생성 (${selected.size})`}
       </button>
       <p className="patch-composer-help">
-        검증된 항목만 선택할 수 있습니다. <Link to="/settings">설정 탭의 API Key</Link>를 이 요청에만 사용합니다.
+        Validated는 바로, Uncertain은 확인 후 패치할 수 있습니다. <Link to="/settings">설정 탭의 API Key</Link>를 이 요청에만 사용합니다.
       </p>
     </div>
   ) : null
@@ -254,7 +266,7 @@ export default function AnalysisDetailPage() {
               <CircleStop size={15} /> {job.status === 'cancelling' ? '중단 요청됨' : cancelBusy ? '요청 중…' : '분석 중단'}
             </button>
           )}
-          {['completed', 'partial'].includes(job.status) && (
+          {(['completed', 'partial'].includes(job.status) || (job.status === 'cancelled' && analysis)) && (
             <a className="secondary-button compact" href={api.downloadUrl(`/api/analyses/${job.id}/download`)}>
               <Download size={15} /> 프로젝트 다운로드
             </a>
@@ -265,11 +277,11 @@ export default function AnalysisDetailPage() {
       {actionError && <ErrorMessage error={actionError} />}
 
       {pollError && (
-        <div className="poll-warning" role="status">
+        <div className={`poll-warning${analysis && !analysisActive ? ' compact' : ''}`} role="status">
           <AlertTriangle size={16} />
           <div>
-            <strong>{pollError.message}</strong>
-            <span>마지막 정상 상태: {job.progress}% · {job.message || job.status}</span>
+            <strong>{analysis && !analysisActive ? '결과 저장됨 · 동기화 지연' : pollError.message}</strong>
+            <span>{analysis && !analysisActive ? pollError.message : `마지막 정상 상태: ${job.progress}% · ${job.message || job.status}`}</span>
             {pollError.traceId && <small>오류 ID: {pollError.traceId}</small>}
           </div>
         </div>
@@ -292,14 +304,14 @@ export default function AnalysisDetailPage() {
       )}
 
       {job.status === 'partial' && (
-        <section className="panel warning-panel">
-          <AlertTriangle /><div><h2>일부 분석만 완료되었습니다.</h2><p>{job.errorMessage || job.message}</p></div>
+        <section className="panel partial-result-panel">
+          <AlertTriangle /><div><h2>분석 결과가 준비되었습니다.</h2><p>완료된 Expert 결과를 기반으로 보고서를 생성했습니다. 미완료 작업의 상세 내용은 Analysis Trace에서 확인할 수 있습니다.</p></div>
         </section>
       )}
 
       {job.status === 'cancelled' && (
         <section className="panel warning-panel">
-          <CircleStop /><div><h2>분석을 중단했습니다.</h2><p>완료된 일부 요청 결과는 저장하지 않았습니다. 다시 분석하려면 새 분석을 시작하세요.</p></div>
+          <CircleStop /><div><h2>분석을 중단했습니다.</h2><p>{analysis ? '중단 시점까지 완료된 Expert 결과를 저장했습니다. 아래에서 부분 결과와 미완료 작업을 확인할 수 있습니다.' : 'Expert 분석이 시작되기 전에 중단되어 저장할 결과가 없습니다.'}</p></div>
         </section>
       )}
 
@@ -326,7 +338,7 @@ export default function AnalysisDetailPage() {
                 onFindingSelect={setActiveFindingId}
                 selectedForPatch={selected}
                 onPatchToggle={togglePatch}
-                patchLocked={Boolean(patch)}
+                patchLocked={patchLocked}
                 patchComposer={patchComposer}
               />
             </Suspense>
@@ -336,7 +348,7 @@ export default function AnalysisDetailPage() {
             <FindingsPanel
               findings={findings}
               selected={selected}
-              patchLocked={Boolean(patch)}
+              patchLocked={patchLocked}
               onPatchToggle={togglePatch}
               onOpenCode={(findingId) => {
                 setActiveFindingId(findingId)
@@ -348,9 +360,12 @@ export default function AnalysisDetailPage() {
 
           {activeTab === 'patch' && (
             patch ? (
-              <Suspense fallback={<WorkbenchLoader />}>
-                <PatchDiffPanel analysisId={id} patch={patch} findings={findings} busy={patchBusy} onAction={patchAction} />
-              </Suspense>
+              <>
+                <Suspense fallback={<WorkbenchLoader />}>
+                  <PatchDiffPanel analysisId={id} patch={patch} findings={findings} busy={patchBusy} onAction={patchAction} />
+                </Suspense>
+                {!patchLocked && <div className="patch-regeneration-row">{patchComposer}</div>}
+              </>
             ) : (
               <section className="empty-workbench-panel">
                 <FileDiff size={28} />
@@ -440,6 +455,8 @@ function OverviewPanel({
     ['Findings', analysis.summary.finding_count],
     ['Validated', validatedCount],
     ['LLM requests', analysis.summary.request_count],
+    ['Expert coverage', formatPercent(analysis.summary.expert_task_coverage ?? 1)],
+    ['Candidate coverage', formatPercent(analysis.summary.candidate_coverage ?? 1)],
     ['Total cost', `$${Number(analysis.summary.total_cost || 0).toFixed(4)}`]
   ]
   return (
@@ -456,7 +473,11 @@ function OverviewPanel({
             <div><dt>Submitted expert tasks</dt><dd>{analysis.summary.submitted_expert_task_count}</dd></div>
             <div><dt>Completed expert tasks</dt><dd>{analysis.summary.completed_expert_task_count ?? analysis.summary.submitted_expert_task_count}</dd></div>
             <div><dt>Failed expert tasks</dt><dd>{analysis.summary.failed_expert_task_count ?? 0}</dd></div>
+            <div><dt>Recovered expert tasks</dt><dd>{analysis.summary.recovered_expert_task_count ?? 0}</dd></div>
+            <div><dt>Timed out expert tasks</dt><dd>{analysis.summary.timed_out_expert_task_count ?? 0}</dd></div>
+            <div><dt>Covered candidates</dt><dd>{analysis.summary.covered_candidate_count ?? analysis.summary.candidate_count} / {analysis.summary.candidate_count}</dd></div>
             <div><dt>Incomplete candidates</dt><dd>{analysis.summary.incomplete_candidate_count ?? 0}</dd></div>
+            <div><dt>Skipped source files</dt><dd>{analysis.summary.skipped_source_file_count ?? 0}</dd></div>
             <div><dt>Max concurrency</dt><dd>{analysis.summary.max_concurrent_expert_requests ?? '—'}</dd></div>
             <div><dt>Skipped expert tasks</dt><dd>{analysis.summary.skipped_expert_task_count ?? 0}</dd></div>
             <div><dt>Structural rejections</dt><dd>{analysis.summary.structural_rejected_count ?? 0}</dd></div>
@@ -525,7 +546,7 @@ function FindingsPanel({
           <tbody>
             {filtered.map((bundle) => {
               const finding = bundle.finding
-              const canPatch = bundle.validation.verdict === 'validated'
+              const canPatch = bundle.validation.verdict !== 'rejected'
               return (
                 <tr key={finding.finding_id} onDoubleClick={() => onOpenCode(finding.finding_id)}>
                   <td><input type="checkbox" checked={selected.has(finding.finding_id)} disabled={!canPatch || patchLocked} onChange={(event) => onPatchToggle(finding.finding_id, event.target.checked)} /></td>

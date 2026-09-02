@@ -4,7 +4,11 @@ import threading
 import unittest
 
 from llm_security.evidence import ExpertContext
-from llm_security.experts import AnalysisCancelled, ParallelExpertRunner
+from llm_security.experts import (
+    AnalysisCancelled,
+    ExpertFailureCode,
+    ParallelExpertRunner,
+)
 from llm_security.llm import LLMResponse
 from llm_security.models import (
     Candidate,
@@ -72,6 +76,42 @@ class ConcurrentClient:
         finally:
             with self.lock:
                 self.active -= 1
+
+
+class RecoveryClient:
+    def __init__(self) -> None:
+        self.calls: dict[str, int] = {}
+        self.metadata: dict[str, list[dict]] = {}
+
+    def complete(self, **kwargs) -> LLMResponse:
+        task_id = str(kwargs["metadata"]["task_id"])
+        self.calls[task_id] = self.calls.get(task_id, 0) + 1
+        self.metadata.setdefault(task_id, []).append(dict(kwargs["metadata"]))
+        if task_id == "T00001" and self.calls[task_id] == 1:
+            raise RuntimeError("OpenRouter HTTP 429: rate limited (provider=Wafer)")
+        return LLMResponse(
+            data={"findings": []},
+            usage=UsageRecord(model=kwargs["model"]),
+            raw={},
+        )
+
+
+class PartialCancellationClient:
+    def __init__(self) -> None:
+        self.cancel = threading.Event()
+        self.release = threading.Event()
+
+    def complete(self, **kwargs) -> LLMResponse:
+        task_id = str(kwargs["metadata"]["task_id"])
+        if task_id == "T00001":
+            threading.Timer(0.02, self.cancel.set).start()
+        else:
+            self.release.wait(timeout=2)
+        return LLMResponse(
+            data={"findings": []},
+            usage=UsageRecord(model=kwargs["model"]),
+            raw={},
+        )
 
 
 def candidate(index: int) -> Candidate:
@@ -190,6 +230,54 @@ class ParallelExpertRunnerTest(unittest.TestCase):
         )
 
         self.assertEqual(100, runner.max_concurrency)
+
+    def test_recoverable_failure_is_retried_once_without_losing_other_work(self) -> None:
+        item = candidate(1)
+        client = RecoveryClient()
+        runner = ParallelExpertRunner(
+            client=client,
+            model="test/model",
+            context_builder=ContextBuilder(),
+            max_concurrency=2,
+            recovery_attempts=1,
+        )
+
+        output = runner.run([item], [route(item)])
+
+        self.assertEqual(2, output.completed_task_count)
+        self.assertEqual(0, output.failed_task_count)
+        self.assertEqual(1, output.recovered_task_count)
+        self.assertEqual([], output.errors)
+        self.assertEqual(2, client.calls["T00001"])
+        self.assertEqual("Wafer", client.metadata["T00001"][1]["exclude_provider"])
+        self.assertEqual(1, len(output.failures))
+        self.assertTrue(output.failures[0].recovered)
+        self.assertEqual(ExpertFailureCode.RATE_LIMIT, output.failures[0].code)
+
+    def test_cancelled_run_keeps_results_collected_before_cancellation(self) -> None:
+        item = candidate(1)
+        client = PartialCancellationClient()
+        runner = ParallelExpertRunner(
+            client=client,
+            model="test/model",
+            context_builder=ContextBuilder(),
+            max_concurrency=2,
+            cancel_callback=client.cancel.is_set,
+        )
+
+        try:
+            output = runner.run([item], [route(item)])
+        finally:
+            client.release.set()
+
+        self.assertTrue(output.cancelled)
+        self.assertEqual(1, output.completed_task_count)
+        self.assertEqual(1, output.skipped_task_count)
+        self.assertEqual([], output.errors)
+        self.assertTrue(any(
+            failure.code == ExpertFailureCode.CANCELLED
+            for failure in output.failures
+        ))
 
     def test_cancelled_run_stops_before_submitting_requests(self) -> None:
         client = ConcurrentClient(expected_concurrency=1)

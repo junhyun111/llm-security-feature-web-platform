@@ -489,7 +489,7 @@ public class AnalysesController : ApiControllerBase
 
     private static bool NeedsDetailSync(AnalysisJob job) =>
         IsActive(job.Status) ||
-        (job.Status is "completed" or "partial" &&
+        (job.Status is "completed" or "partial" or "cancelled" &&
          string.IsNullOrWhiteSpace(job.AnalysisJson));
 
     private static AnalysisSyncResult CachedSync(AnalysisJob job) => new(

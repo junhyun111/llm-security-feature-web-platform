@@ -26,6 +26,8 @@ class ModelConfig:
     require_parameters: bool = True
     allow_fallbacks: bool = True
     structured_output: bool = True
+    json_repair: bool = False
+    structured_output_fallback: bool = False
 
 
 @dataclass(slots=True)
@@ -144,6 +146,12 @@ class AppConfig:
                 ),
                 structured_output=_as_bool(
                     values.get("OPENROUTER_STRUCTURED_OUTPUT", "true")
+                ),
+                json_repair=_as_bool(
+                    values.get("OPENROUTER_JSON_REPAIR", "false")
+                ),
+                structured_output_fallback=_as_bool(
+                    values.get("OPENROUTER_STRUCTURED_OUTPUT_FALLBACK", "false")
                 ),
             ),
             router=RouterConfig(

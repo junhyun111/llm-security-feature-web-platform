@@ -163,10 +163,6 @@ export default function NewAnalysisPage() {
 
   const start = async () => {
     if (!files.length) return
-    if (totalTooLarge) {
-      setError(`분석 소스의 합계가 ${formatBytes(MAX_SOURCE_TOTAL_BYTES)} 제한을 초과합니다.`)
-      return
-    }
     if (!modelId.trim()) {
       setError('사용할 OpenRouter 모델 ID를 입력해 주세요.')
       return
@@ -241,7 +237,15 @@ export default function NewAnalysisPage() {
               </div>
             </div>
           )}
-          {totalTooLarge && <div className="error-box analysis-error-box">분석 소스 합계는 100MB 이하여야 합니다.</div>}
+          {totalTooLarge && (
+            <div className="excluded-file-summary">
+              <FileWarning size={15} />
+              <div>
+                <strong>분석 소스가 {formatBytes(MAX_SOURCE_TOTAL_BYTES)}를 초과합니다.</strong>
+                <span>업로드는 계속되며 용량 범위 안의 파일을 분석하고 제외 내역을 결과 경고에 기록합니다.</span>
+              </div>
+            </div>
+          )}
           {error && <div className="error-box analysis-error-box">{error}</div>}
         </section>
 
@@ -303,7 +307,7 @@ export default function NewAnalysisPage() {
         </section>
       </div>
 
-      <button className="primary-button analysis-start-button" disabled={!files.length || totalTooLarge || busy || !modelId.trim() || !apiKey.trim()} onClick={start}>
+      <button className="primary-button analysis-start-button" disabled={!files.length || busy || !modelId.trim() || !apiKey.trim()} onClick={start}>
         <ScanSearch size={18} /> {busy ? '업로드 중…' : '보안 분석 시작'}
       </button>
       <section className="info-strip analysis-process-strip">

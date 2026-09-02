@@ -153,10 +153,12 @@ class RequestAwareWebJobService(WebJobService):
         self._raise_if_cancelled(job.job_id)
 
         progress(20, "Loading C/C++ source files")
+        source_warnings: list[str] = []
         source_files = load_project_sources(
             input_directory,
             max_file_bytes=self.settings.max_source_file_bytes,
             max_total_bytes=self.settings.max_source_total_bytes,
+            warnings=source_warnings,
         )
         self._raise_if_cancelled(job.job_id)
 
@@ -177,12 +179,13 @@ class RequestAwareWebJobService(WebJobService):
             config,
             router,
             max_concurrency=self.settings.max_concurrent_expert_requests,
+            recovery_attempts=self.settings.expert_recovery_attempts,
             progress_callback=_expert_progress_callback(progress),
             cancel_callback=lambda: self._is_cancel_requested(job.job_id),
         ).run(case)
-        self._raise_if_cancelled(job.job_id)
-
-        progress(95, "Preparing evidence-grounded report")
+        result.cancelled = result.cancelled or self._is_cancel_requested(job.job_id)
+        if not result.cancelled:
+            progress(95, "Preparing evidence-grounded report")
 
         candidates = {item.candidate_id: item for item in result.candidates}
         validations = {item.finding_id: item for item in result.validations}
@@ -227,14 +230,37 @@ class RequestAwareWebJobService(WebJobService):
                 "submitted_expert_task_count": result.submitted_expert_task_count,
                 "completed_expert_task_count": result.completed_expert_task_count,
                 "failed_expert_task_count": result.failed_expert_task_count,
+                "recovered_expert_task_count": result.recovered_expert_task_count,
+                "timed_out_expert_task_count": result.timed_out_expert_task_count,
                 "incomplete_candidate_count": result.incomplete_candidate_count,
+                "covered_candidate_count": result.covered_candidate_count,
                 "skipped_expert_task_count": result.skipped_expert_task_count,
+                "cancelled": result.cancelled,
                 "structural_rejected_count": sum(
                     item.verdict == ValidationVerdict.REJECTED
                     for item in result.structural_validations
                 ),
                 "max_concurrent_expert_requests": (
                     self.settings.max_concurrent_expert_requests
+                ),
+                "expert_task_coverage": (
+                    result.completed_expert_task_count / result.expert_task_count
+                    if result.expert_task_count
+                    else 1.0
+                ),
+                "candidate_coverage": (
+                    result.covered_candidate_count / len(result.candidates)
+                    if result.candidates
+                    else 1.0
+                ),
+                "skipped_source_file_count": len(source_warnings),
+                "degraded": bool(
+                    result.failed_expert_task_count
+                    or result.skipped_expert_task_count
+                    or result.recovered_expert_task_count
+                    or result.cancelled
+                    or result.errors
+                    or source_warnings
                 ),
                 "request_settings": {
                     **options.safe_metadata(),
@@ -248,7 +274,8 @@ class RequestAwareWebJobService(WebJobService):
             "structural_validations": [
                 to_dict(item) for item in result.structural_validations
             ],
-            "errors": result.errors,
+            "errors": source_warnings + result.errors,
+            "expert_failures": [to_dict(item) for item in result.expert_failures],
             "usage": [to_dict(item) for item in result.usage],
         }
 
@@ -265,7 +292,7 @@ class RequestAwareWebJobService(WebJobService):
             dict.fromkeys(str(item) for item in finding_ids if item)
         )
         if not selected_ids:
-            raise ValueError("Select at least one validated finding")
+            raise ValueError("Select at least one finding")
 
         analysis = self.get_analysis(job_id)
         bundles = [
@@ -273,8 +300,8 @@ class RequestAwareWebJobService(WebJobService):
             for finding_id in selected_ids
         ]
         for bundle in bundles:
-            if bundle["validation"]["verdict"] != ValidationVerdict.VALIDATED.value:
-                raise ValueError("Only validated findings can be patched")
+            if bundle["validation"]["verdict"] == ValidationVerdict.REJECTED.value:
+                raise ValueError("Rejected findings cannot be patched")
 
         prior_options = self.request_options(job_id)
         config = self._config_for_options(RuntimeJobOptions(
@@ -286,23 +313,17 @@ class RequestAwareWebJobService(WebJobService):
 
         with self._lock:
             existing = self.get_patch_batch(job_id)
+            revision = 1
             if existing is not None:
-                if existing.finding_ids == selected_ids:
-                    return existing
-                raise RuntimeError(
-                    "This job has already used its one patch-generation call"
-                )
-
-            budget_path = self._patch_budget_path(job_id)
-            if budget_path.exists():
-                raise RuntimeError(
-                    "This job has already attempted its one patch-generation call"
-                )
-
-            _write_json_atomic(
-                budget_path,
-                {"finding_ids": selected_ids, "started_at": _now()},
-            )
+                if existing.status == "approved":
+                    raise RuntimeError("An applied patch cannot be regenerated")
+                revision = existing.revision + 1
+                if existing.revision - 1 >= self.settings.max_patch_regenerations:
+                    raise RuntimeError(
+                        "Patch regeneration limit reached "
+                        f"({self.settings.max_patch_regenerations})"
+                    )
+                self._archive_patch_batch(job_id, existing)
 
         items = [
             (
@@ -336,7 +357,7 @@ class RequestAwareWebJobService(WebJobService):
         record = PatchBatchRecord(
             patch_id="PB-"
             + hashlib.sha256(
-                "\n".join(selected_ids).encode("utf-8")
+                ("\n".join(selected_ids) + f"\nrevision={revision}").encode("utf-8")
             ).hexdigest()[:16],
             finding_ids=selected_ids,
             status="proposed",
@@ -347,6 +368,7 @@ class RequestAwareWebJobService(WebJobService):
             usage=to_dict(proposal.usage),
             created_at=now,
             updated_at=now,
+            revision=revision,
         )
         self._write_patch_batch(job_id, record)
         return record

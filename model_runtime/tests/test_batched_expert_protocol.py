@@ -229,13 +229,15 @@ class BatchedExpertProtocolTest(unittest.TestCase):
                 "errors": ["one batch failed"],
             }
         )
-        below_threshold = _analysis_outcome(
+        low_coverage_partial = _analysis_outcome(
             {
                 "summary": {
                     "expert_task_count": 20,
                     "submitted_expert_task_count": 20,
                     "completed_expert_task_count": 15,
                     "failed_expert_task_count": 5,
+                    "candidate_count": 4,
+                    "covered_candidate_count": 2,
                 },
                 "errors": ["too many requests failed"],
             }
@@ -250,11 +252,24 @@ class BatchedExpertProtocolTest(unittest.TestCase):
                 "errors": [],
             }
         )
+        cancelled = _analysis_outcome(
+            {
+                "summary": {
+                    "cancelled": True,
+                    "expert_task_count": 20,
+                    "completed_expert_task_count": 7,
+                    "candidate_count": 4,
+                    "covered_candidate_count": 3,
+                },
+                "errors": [],
+            }
+        )
 
         self.assertEqual(JobStatus.FAILED, failed[0])
         self.assertEqual(JobStatus.PARTIAL, partial[0])
-        self.assertEqual(JobStatus.FAILED, below_threshold[0])
+        self.assertEqual(JobStatus.PARTIAL, low_coverage_partial[0])
         self.assertEqual(JobStatus.COMPLETED, completed[0])
+        self.assertEqual(JobStatus.CANCELLED, cancelled[0])
 
 
 if __name__ == "__main__":

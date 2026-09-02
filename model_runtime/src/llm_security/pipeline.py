@@ -110,4 +110,25 @@ class VulnerabilityPipeline:
                 0,
             ),
             skipped_expert_task_count=expert_output.skipped_task_count,
+            recovered_expert_task_count=getattr(
+                expert_output,
+                "recovered_task_count",
+                0,
+            ),
+            timed_out_expert_task_count=getattr(
+                expert_output,
+                "timed_out_task_count",
+                0,
+            ),
+            covered_candidate_count=getattr(
+                expert_output,
+                "covered_candidate_count",
+                len(candidates) - getattr(
+                    expert_output,
+                    "incomplete_candidate_count",
+                    0,
+                ),
+            ),
+            cancelled=getattr(expert_output, "cancelled", False),
+            expert_failures=getattr(expert_output, "failures", []),
         )

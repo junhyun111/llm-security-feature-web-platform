@@ -82,8 +82,10 @@ class WebSettings:
     worker_count: int = 1
     candidate_gate_enabled: bool = True
     max_concurrent_expert_requests: int = 100
+    expert_recovery_attempts: int = 1
     detection_max_output_tokens: int = 16_384
     patch_max_prompt_characters: int = 120_000
+    max_patch_regenerations: int = 5
     env_file: Path = Path(".env")
 
     @classmethod
@@ -122,11 +124,19 @@ class WebSettings:
                     ),
                 ),
             ),
+            expert_recovery_attempts=max(
+                0,
+                min(2, int(values.get("WEB_EXPERT_RECOVERY_ATTEMPTS", "1"))),
+            ),
             detection_max_output_tokens=int(
                 values.get("WEB_DETECTION_MAX_OUTPUT_TOKENS", "16384")
             ),
             patch_max_prompt_characters=int(
                 values.get("WEB_PATCH_MAX_PROMPT_CHARACTERS", "120000")
+            ),
+            max_patch_regenerations=max(
+                0,
+                int(values.get("WEB_MAX_PATCH_REGENERATIONS", "5")),
             ),
             env_file=Path(env_file),
         )
@@ -174,6 +184,7 @@ class PatchBatchRecord:
     usage: dict
     created_at: str
     updated_at: str
+    revision: int = 1
 
 
 AnalysisCallback = Callable[[Path, JobRecord, Callable[[int, str], None]], dict]
@@ -315,7 +326,11 @@ class WebJobService:
 
     def get_analysis(self, job_id: str) -> dict:
         record = self.get_job(job_id)
-        if record.status not in {JobStatus.COMPLETED, JobStatus.PARTIAL}:
+        if record.status not in {
+            JobStatus.COMPLETED,
+            JobStatus.PARTIAL,
+            JobStatus.CANCELLED,
+        }:
             raise RuntimeError("Analysis is not complete")
         path = self._job_dir(job_id) / "analysis.json"
         if not path.exists():
@@ -327,16 +342,16 @@ class WebJobService:
         job_id: str,
         finding_ids: Sequence[str],
     ) -> PatchBatchRecord:
-        """Spend the job's single patch call on all selected findings."""
+        """Generate or regenerate a bounded patch revision."""
 
         selected_ids = sorted(dict.fromkeys(str(item) for item in finding_ids if item))
         if not selected_ids:
-            raise ValueError("Select at least one validated finding")
+            raise ValueError("Select at least one finding")
         analysis = self.get_analysis(job_id)
         bundles = [_finding_bundle(analysis, finding_id) for finding_id in selected_ids]
         for bundle in bundles:
-            if bundle["validation"]["verdict"] != ValidationVerdict.VALIDATED.value:
-                raise ValueError("Only validated findings can be patched")
+            if bundle["validation"]["verdict"] == ValidationVerdict.REJECTED.value:
+                raise ValueError("Rejected findings cannot be patched")
 
         config = AppConfig.from_env(self.settings.env_file)
         if not config.runtime.allow_paid_experiments:
@@ -345,21 +360,17 @@ class WebJobService:
             )
         with self._lock:
             existing = self.get_patch_batch(job_id)
+            revision = 1
             if existing is not None:
-                if existing.finding_ids == selected_ids:
-                    return existing
-                raise RuntimeError(
-                    "This job has already used its one patch-generation call"
-                )
-            budget_path = self._patch_budget_path(job_id)
-            if budget_path.exists():
-                raise RuntimeError(
-                    "This job has already attempted its one patch-generation call"
-                )
-            _write_json_atomic(
-                budget_path,
-                {"finding_ids": selected_ids, "started_at": _now()},
-            )
+                if existing.status == "approved":
+                    raise RuntimeError("An applied patch cannot be regenerated")
+                revision = existing.revision + 1
+                if existing.revision - 1 >= self.settings.max_patch_regenerations:
+                    raise RuntimeError(
+                        "Patch regeneration limit reached "
+                        f"({self.settings.max_patch_regenerations})"
+                    )
+                self._archive_patch_batch(job_id, existing)
         items = [
             (
                 _finding_from_raw(bundle["finding"]),
@@ -385,7 +396,7 @@ class WebJobService:
         now = _now()
         record = PatchBatchRecord(
             patch_id="PB-" + hashlib.sha256(
-                "\n".join(selected_ids).encode("utf-8")
+                ("\n".join(selected_ids) + f"\nrevision={revision}").encode("utf-8")
             ).hexdigest()[:16],
             finding_ids=selected_ids,
             status="proposed",
@@ -396,6 +407,7 @@ class WebJobService:
             usage=to_dict(proposal.usage),
             created_at=now,
             updated_at=now,
+            revision=revision,
         )
         self._write_patch_batch(job_id, record)
         return record
@@ -451,8 +463,8 @@ class WebJobService:
     def propose_patch(self, job_id: str, finding_id: str) -> PatchRecord:
         analysis = self.get_analysis(job_id)
         bundle = _finding_bundle(analysis, finding_id)
-        if bundle["validation"]["verdict"] != ValidationVerdict.VALIDATED.value:
-            raise ValueError("Only validated findings can be patched")
+        if bundle["validation"]["verdict"] == ValidationVerdict.REJECTED.value:
+            raise ValueError("Rejected findings cannot be patched")
         existing = self._read_patch(job_id, finding_id)
         if existing and existing.status in {"proposed", "approved"}:
             return existing
@@ -747,10 +759,11 @@ class WebJobService:
             analysis = self._analysis_callback(
                 self._job_dir(job_id) / "input", record, progress
             )
-            self._raise_if_cancelled(job_id)
+            summary = analysis.setdefault("summary", {})
+            if self._is_cancel_requested(job_id):
+                summary["cancelled"] = True
             _write_json_atomic(self._job_dir(job_id) / "analysis.json", analysis)
             completed = self.get_job(job_id)
-            summary = analysis.get("summary", {})
             completed.source_file_count = int(summary.get("source_file_count", 0))
             completed.finding_count = int(summary.get("finding_count", 0))
             completed.validated_finding_count = int(
@@ -808,10 +821,12 @@ class WebJobService:
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
         self._raise_if_cancelled(job.job_id)
         progress(20, "Loading C/C++ source files")
+        source_warnings: list[str] = []
         source_files = load_project_sources(
             input_directory,
             max_file_bytes=self.settings.max_source_file_bytes,
             max_total_bytes=self.settings.max_source_total_bytes,
+            warnings=source_warnings,
         )
         self._raise_if_cancelled(job.job_id)
         progress(30, "Loading Router and static analyzer")
@@ -829,11 +844,13 @@ class WebJobService:
             config,
             router,
             max_concurrency=self.settings.max_concurrent_expert_requests,
+            recovery_attempts=self.settings.expert_recovery_attempts,
             progress_callback=_expert_progress_callback(progress),
             cancel_callback=lambda: self._is_cancel_requested(job.job_id),
         ).run(case)
-        self._raise_if_cancelled(job.job_id)
-        progress(95, "Preparing evidence-grounded report")
+        result.cancelled = result.cancelled or self._is_cancel_requested(job.job_id)
+        if not result.cancelled:
+            progress(95, "Preparing evidence-grounded report")
         candidates = {item.candidate_id: item for item in result.candidates}
         validations = {item.finding_id: item for item in result.validations}
         bundles = [
@@ -875,8 +892,12 @@ class WebJobService:
                 "submitted_expert_task_count": result.submitted_expert_task_count,
                 "completed_expert_task_count": result.completed_expert_task_count,
                 "failed_expert_task_count": result.failed_expert_task_count,
+                "recovered_expert_task_count": result.recovered_expert_task_count,
+                "timed_out_expert_task_count": result.timed_out_expert_task_count,
                 "incomplete_candidate_count": result.incomplete_candidate_count,
+                "covered_candidate_count": result.covered_candidate_count,
                 "skipped_expert_task_count": result.skipped_expert_task_count,
+                "cancelled": result.cancelled,
                 "structural_rejected_count": sum(
                     item.verdict == ValidationVerdict.REJECTED
                     for item in result.structural_validations
@@ -884,13 +905,33 @@ class WebJobService:
                 "max_concurrent_expert_requests": (
                     self.settings.max_concurrent_expert_requests
                 ),
+                "expert_task_coverage": (
+                    result.completed_expert_task_count / result.expert_task_count
+                    if result.expert_task_count
+                    else 1.0
+                ),
+                "candidate_coverage": (
+                    result.covered_candidate_count / len(result.candidates)
+                    if result.candidates
+                    else 1.0
+                ),
+                "skipped_source_file_count": len(source_warnings),
+                "degraded": bool(
+                    result.failed_expert_task_count
+                    or result.skipped_expert_task_count
+                    or result.recovered_expert_task_count
+                    or result.cancelled
+                    or result.errors
+                    or source_warnings
+                ),
             },
             "findings": bundles,
             "routes": [to_dict(item) for item in result.routes],
             "structural_validations": [
                 to_dict(item) for item in result.structural_validations
             ],
-            "errors": result.errors,
+            "errors": source_warnings + result.errors,
+            "expert_failures": [to_dict(item) for item in result.expert_failures],
             "usage": [to_dict(item) for item in result.usage],
         }
 
@@ -959,6 +1000,14 @@ class WebJobService:
     def _write_patch_batch(self, job_id: str, record: PatchBatchRecord) -> None:
         _write_json_atomic(self._patch_batch_path(job_id), to_dict(record))
 
+    def _archive_patch_batch(self, job_id: str, record: PatchBatchRecord) -> None:
+        directory = self._job_dir(job_id) / "patch-revisions"
+        directory.mkdir(parents=True, exist_ok=True)
+        _write_json_atomic(
+            directory / f"revision-{record.revision:03d}.json",
+            to_dict(record),
+        )
+
     def _read_patch(self, job_id: str, finding_id: str) -> PatchRecord | None:
         path = self._patch_path(job_id, finding_id)
         if not path.exists():
@@ -977,6 +1026,7 @@ def load_project_sources(
     *,
     max_file_bytes: int,
     max_total_bytes: int,
+    warnings: list[str] | None = None,
 ) -> dict[str, str]:
     root = Path(project_directory).resolve()
     if not root.is_dir():
@@ -991,12 +1041,17 @@ def load_project_sources(
             continue
         size = path.stat().st_size
         if size > max_file_bytes:
-            raise ValueError(
-                f"Source file exceeds WEB_MAX_SOURCE_FILE_MB: {relative.as_posix()}"
-            )
+            if warnings is not None:
+                warnings.append("Oversized source skipped: " + relative.as_posix())
+            continue
+        if total + size > max_total_bytes:
+            if warnings is not None:
+                warnings.append(
+                    "Source skipped because the analysis byte budget was reached: "
+                    + relative.as_posix()
+                )
+            continue
         total += size
-        if total > max_total_bytes:
-            raise ValueError("C/C++ source exceeds WEB_MAX_SOURCE_TOTAL_MB")
         sources[relative.as_posix()] = path.read_text(
             encoding="utf-8", errors="replace"
         )
@@ -1030,6 +1085,12 @@ def _expert_progress_callback(
     def report(state: ExpertProgress) -> None:
         total = max(1, state.total_task_count)
         percent = 45 + int(40 * state.finished_task_count / total)
+        recovery = (
+            f", recovery {state.recovered_task_count}/"
+            f"{state.recovery_task_count}"
+            if state.recovery_task_count
+            else ""
+        )
         progress(
             min(85, percent),
             (
@@ -1038,6 +1099,7 @@ def _expert_progress_callback(
                 f"{state.successful_task_count} succeeded, "
                 f"{state.failed_task_count} failed, "
                 f"active {state.active_request_count}/{state.max_concurrency}"
+                f"{recovery}"
             ),
         )
 
@@ -1081,6 +1143,20 @@ def _analysis_outcome(
         0,
         int(summary.get("incomplete_candidate_count", 0) or 0),
     )
+    candidate_count = max(
+        0,
+        int(summary.get("candidate_count", 0) or 0),
+    )
+    covered_candidates = max(
+        0,
+        int(
+            summary.get(
+                "covered_candidate_count",
+                max(0, candidate_count - incomplete_candidates),
+            )
+            or 0
+        ),
+    )
     raw_errors = analysis.get("errors", [])
     errors = (
         [str(item) for item in raw_errors if str(item).strip()]
@@ -1088,12 +1164,28 @@ def _analysis_outcome(
         else [str(raw_errors)]
     )
 
-    success_ratio = completed / task_count if task_count else 1.0
-    if task_count > 0 and success_ratio < 0.80:
+    if bool(summary.get("cancelled", False)):
+        message = (
+            "Analysis cancelled; completed results retained "
+            f"({completed}/{task_count} Expert tasks, "
+            f"{covered_candidates}/{candidate_count} candidates)"
+        )
+        return JobStatus.CANCELLED, message, None
+
+    if task_count > 0 and completed == 0:
         detail = (
-            "정상 처리된 Expert 작업이 80% 미만입니다 "
+            "정상 처리된 Expert 작업이 없습니다 "
             f"(성공 {completed}/{task_count}, 실패 {failed}, "
             f"미완료 Candidate {incomplete_candidates})."
+        )
+        if errors:
+            detail += " " + " | ".join(errors[:2])
+        return JobStatus.FAILED, "Analysis failed", detail
+
+    if candidate_count > 0 and covered_candidates == 0:
+        detail = (
+            "분석 가능한 Candidate 결과가 없습니다 "
+            f"(Candidate coverage {covered_candidates}/{candidate_count})."
         )
         if errors:
             detail += " " + " | ".join(errors[:2])
@@ -1103,7 +1195,7 @@ def _analysis_outcome(
         detail = (
             "일부 Expert 작업만 정상 처리되었습니다 "
             f"(성공 {completed}/{task_count}, 실패 {failed}, "
-            f"미완료 Candidate {incomplete_candidates})."
+            f"Candidate coverage {covered_candidates}/{candidate_count})."
         )
         if errors:
             detail += " " + " | ".join(errors[:2])

@@ -4,7 +4,7 @@ const labels: Record<string, string> = {
   analyzing: '분석 중',
   cancelling: '중단 요청됨',
   completed: '완료',
-  partial: '부분 완료',
+  partial: '경고와 함께 완료',
   failed: '실패',
   cancelled: '중단됨',
   validated: '검증됨',

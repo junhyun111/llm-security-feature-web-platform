@@ -270,6 +270,11 @@ class PipelineResult:
     failed_expert_task_count: int = 0
     incomplete_candidate_count: int = 0
     skipped_expert_task_count: int = 0
+    recovered_expert_task_count: int = 0
+    timed_out_expert_task_count: int = 0
+    covered_candidate_count: int = 0
+    cancelled: bool = False
+    expert_failures: list[Any] = field(default_factory=list)
 
     @property
     def validated_findings(self) -> list[Finding]:

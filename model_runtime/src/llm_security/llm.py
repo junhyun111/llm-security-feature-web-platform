@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -47,6 +48,8 @@ class OpenRouterClient:
         require_parameters: bool = True,
         allow_fallbacks: bool = True,
         structured_output: bool = True,
+        json_repair: bool = False,
+        structured_output_fallback: bool = False,
     ) -> None:
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
@@ -67,6 +70,8 @@ class OpenRouterClient:
         self.require_parameters = require_parameters
         self.allow_fallbacks = allow_fallbacks
         self.structured_output = structured_output
+        self.json_repair = json_repair
+        self.structured_output_fallback = structured_output_fallback
         self.endpoint = "https://openrouter.ai/api/v1/chat/completions"
 
     def complete(
@@ -94,8 +99,14 @@ class OpenRouterClient:
         }
         if self.provider_sort:
             provider_config["sort"] = self.provider_sort
-        if self.provider_ignore:
-            provider_config["ignore"] = list(self.provider_ignore)
+        ignored_providers = list(self.provider_ignore)
+        excluded_provider = str(
+            (metadata or {}).get("exclude_provider") or ""
+        ).strip().lower()
+        if excluded_provider and excluded_provider not in ignored_providers:
+            ignored_providers.append(excluded_provider)
+        if ignored_providers:
+            provider_config["ignore"] = ignored_providers
         if self.provider:
             provider_config["order"] = [self.provider]
 
@@ -127,7 +138,9 @@ class OpenRouterClient:
         }
         start = time.perf_counter()
         last_error: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        format_fallback_used = False
+        transport_retries = 0
+        while True:
             try:
                 with httpx.Client(timeout=self.timeout_seconds) as client:
                     response = client.post(self.endpoint, headers=headers, json=body)
@@ -137,15 +150,35 @@ class OpenRouterClient:
                         f"OpenRouter HTTP {response.status_code}: "
                         f"{detail or response.reason_phrase}"
                     )
-                    if attempt < self.max_retries:
+                    if transport_retries < self.max_retries:
                         time.sleep(
                             _retry_delay(
-                                attempt,
+                                transport_retries,
                                 response.headers.get("Retry-After"),
                             )
                         )
+                        transport_retries += 1
                         continue
                     break
+                if (
+                    self.structured_output
+                    and self.structured_output_fallback
+                    and not format_fallback_used
+                    and response.status_code in {400, 404, 422}
+                    and _structured_output_rejected(response.text)
+                ):
+                    schema = response_schema.get("schema", response_schema)
+                    fallback_messages = [dict(message) for message in messages]
+                    fallback_messages[-1]["content"] += (
+                        "\n\nReturn only a JSON object matching this JSON Schema. "
+                        "Do not use Markdown fences:\n"
+                        + json.dumps(schema, ensure_ascii=False)
+                    )
+                    body["messages"] = fallback_messages
+                    body.pop("response_format", None)
+                    body["provider"]["require_parameters"] = False
+                    format_fallback_used = True
+                    continue
                 if response.is_error:
                     detail = response.text.strip().replace("\n", " ")[:1000]
                     raise RuntimeError(
@@ -186,7 +219,10 @@ class OpenRouterClient:
                     )
                 if isinstance(content, str):
                     try:
-                        data = _decode_json_content(content)
+                        data = _decode_json_content(
+                            content,
+                            repair=self.json_repair,
+                        )
                     except json.JSONDecodeError as error:
                         finish_reason = choice.get("finish_reason", "unknown")
                         raise RuntimeError(
@@ -215,8 +251,9 @@ class OpenRouterClient:
                 return LLMResponse(data=data, usage=usage, raw=raw)
             except httpx.TransportError as error:
                 last_error = error
-                if attempt < self.max_retries:
-                    time.sleep(_retry_delay(attempt))
+                if transport_retries < self.max_retries:
+                    time.sleep(_retry_delay(transport_retries))
+                    transport_retries += 1
                     continue
                 break
             except (json.JSONDecodeError, KeyError, TypeError) as error:
@@ -226,7 +263,11 @@ class OpenRouterClient:
         raise RuntimeError(f"OpenRouter request failed: {last_error}")
 
 
-def _decode_json_content(content: str) -> dict[str, Any]:
+def _decode_json_content(
+    content: str,
+    *,
+    repair: bool = False,
+) -> dict[str, Any]:
     stripped = content.strip()
     if stripped.startswith("```"):
         lines = stripped.splitlines()
@@ -235,10 +276,37 @@ def _decode_json_content(content: str) -> dict[str, Any]:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
-    payload = json.loads(stripped)
+    if repair:
+        first_brace = stripped.find("{")
+        last_brace = stripped.rfind("}")
+        if first_brace >= 0 and last_brace > first_brace:
+            stripped = stripped[first_brace : last_brace + 1]
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        if not repair:
+            raise
+        # Best-effort web models frequently emit harmless trailing commas.
+        # Repair syntax only; semantic validity remains the Validator's job.
+        repaired = re.sub(r",\s*([}\]])", r"\1", stripped)
+        payload = json.loads(repaired)
     if not isinstance(payload, dict):
         raise TypeError("The model response must be a JSON object")
     return payload
+
+
+def _structured_output_rejected(body: str) -> bool:
+    lowered = body.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "response_format",
+            "structured output",
+            "structured_outputs",
+            "json_schema",
+            "unsupported parameter",
+        )
+    )
 
 
 def _retry_delay(attempt: int, retry_after: str | None = None) -> float:
