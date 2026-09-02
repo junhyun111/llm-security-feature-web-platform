@@ -181,6 +181,104 @@ public class AnalysesController : ControllerBase
         }
     }
 
+    [HttpGet("{id:guid}/files")]
+    public async Task<IActionResult> Files(
+        Guid id,
+        [FromQuery] string version = "original",
+        CancellationToken cancellationToken = default)
+    {
+        var job = await GetOwnedJob(id, cancellationToken);
+        if (job is null)
+            return NotFound();
+
+        try
+        {
+            var json = await _analyzer.GetProjectFilesJsonAsync(
+                job.AnalyzerJobId,
+                version,
+                cancellationToken);
+            return Content(json, "application/json");
+        }
+        catch (AnalyzerApiException ex)
+        {
+            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+        }
+        catch (HttpRequestException)
+        {
+            return StatusCode(
+                StatusCodes.Status503ServiceUnavailable,
+                new { message = "분석 Runtime에서 소스 파일 목록을 불러올 수 없습니다." });
+        }
+    }
+
+    [HttpGet("{id:guid}/files/content")]
+    public async Task<IActionResult> FileContent(
+        Guid id,
+        [FromQuery] string path,
+        [FromQuery] string version = "original",
+        CancellationToken cancellationToken = default)
+    {
+        var job = await GetOwnedJob(id, cancellationToken);
+        if (job is null)
+            return NotFound();
+        if (string.IsNullOrWhiteSpace(path))
+            return BadRequest(new { message = "조회할 소스 파일 경로를 입력해주세요." });
+
+        try
+        {
+            var json = await _analyzer.GetProjectFileJsonAsync(
+                job.AnalyzerJobId,
+                path,
+                version,
+                cancellationToken);
+            return Content(json, "application/json");
+        }
+        catch (AnalyzerApiException ex)
+        {
+            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+        }
+        catch (HttpRequestException)
+        {
+            return StatusCode(
+                StatusCodes.Status503ServiceUnavailable,
+                new { message = "분석 Runtime에서 소스 파일을 불러올 수 없습니다." });
+        }
+    }
+
+    [HttpGet("{id:guid}/patches/{patchId}/preview/content")]
+    public async Task<IActionResult> PatchPreviewContent(
+        Guid id,
+        string patchId,
+        [FromQuery] string path,
+        CancellationToken cancellationToken)
+    {
+        var job = await GetOwnedJob(id, cancellationToken);
+        if (job is null)
+            return NotFound();
+        if (string.IsNullOrWhiteSpace(path))
+            return BadRequest(new { message = "미리 볼 소스 파일 경로를 입력해주세요." });
+
+        try
+        {
+            var json = await _analyzer.GetPatchPreviewFileJsonAsync(
+                job.AnalyzerJobId,
+                patchId,
+                path,
+                cancellationToken);
+            return Content(json, "application/json");
+        }
+        catch (AnalyzerApiException ex)
+        {
+            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+        }
+        catch (HttpRequestException)
+        {
+            return StatusCode(
+                StatusCodes.Status503ServiceUnavailable,
+                new { message = "패치 미리보기를 생성할 수 없습니다." });
+        }
+    }
+
     [HttpPost("{id:guid}/patches/{patchId}/{action}")]
     public async Task<IActionResult> PatchAction(
         Guid id,

@@ -1,0 +1,377 @@
+.analysis-detail-page {
+  width: min(1540px, calc(100% - 40px));
+  padding-top: 28px;
+}
+
+.workbench-detail-header {
+  margin-bottom: 18px;
+}
+
+.workbench-detail-header h1 {
+  font-size: 26px;
+}
+
+.detail-tabs {
+  height: 42px;
+  margin-bottom: 0;
+  padding: 0 8px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  border: 1px solid #30363d;
+  border-bottom: 0;
+  background: #161b22;
+  overflow-x: auto;
+}
+
+.detail-tabs button {
+  height: 38px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-bottom: 2px solid transparent;
+  color: #8b949e;
+  background: transparent;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.detail-tabs button:hover {
+  color: #c9d1d9;
+}
+
+.detail-tabs button.active {
+  border-bottom-color: #2f81f7;
+  color: #f0f6fc;
+  background: #0d1117;
+}
+
+.detail-tabs button span {
+  min-width: 17px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  color: #79c0ff;
+  background: rgba(47, 129, 247, .12);
+  text-align: center;
+  font-size: 9px;
+}
+
+.patch-composer-help {
+  margin: 0;
+  color: #8b949e;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.empty-workbench-panel,
+.overview-workbench-panel,
+.findings-workbench-panel {
+  border: 1px solid #30363d;
+  background: #0d1117;
+}
+
+.empty-workbench-panel {
+  min-height: 430px;
+  padding: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #8b949e;
+  text-align: center;
+}
+
+.empty-workbench-panel svg {
+  color: #58a6ff;
+}
+
+.empty-workbench-panel h2 {
+  margin: 13px 0 7px;
+  color: #e6edf3;
+  font-size: 17px;
+}
+
+.empty-workbench-panel p {
+  max-width: 480px;
+  margin: 0 0 18px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.overview-workbench-panel {
+  padding: 18px;
+}
+
+.detail-metric-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  border: 1px solid #30363d;
+}
+
+.detail-metric-row > div {
+  min-width: 0;
+  padding: 14px;
+  border-right: 1px solid #30363d;
+  background: #161b22;
+}
+
+.detail-metric-row > div:last-child {
+  border-right: 0;
+}
+
+.detail-metric-row span,
+.detail-metric-row strong {
+  display: block;
+}
+
+.detail-metric-row span {
+  color: #8b949e;
+  font-size: 9px;
+}
+
+.detail-metric-row strong {
+  margin-top: 5px;
+  color: #f0f6fc;
+  font-size: 18px;
+}
+
+.overview-columns {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.overview-columns > div {
+  padding: 16px;
+  border: 1px solid #30363d;
+}
+
+.overview-columns h2 {
+  margin: 0 0 12px;
+  color: #c9d1d9;
+  font-size: 12px;
+}
+
+.overview-columns dl {
+  margin: 0;
+}
+
+.overview-columns dl > div {
+  padding: 9px 0;
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid #21262d;
+  color: #8b949e;
+  font-size: 10px;
+}
+
+.overview-columns dt,
+.overview-columns dd {
+  margin: 0;
+}
+
+.overview-columns dd {
+  color: #c9d1d9;
+  font-weight: 700;
+}
+
+.verdict-distribution {
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 85px 1fr 25px;
+  align-items: center;
+  gap: 10px;
+}
+
+.verdict-distribution > div {
+  height: 5px;
+  overflow: hidden;
+  background: #21262d;
+}
+
+.verdict-distribution i {
+  height: 100%;
+  display: block;
+  background: #2f81f7;
+}
+
+.verdict-distribution strong {
+  color: #c9d1d9;
+  font-size: 10px;
+  text-align: right;
+}
+
+.findings-toolbar {
+  min-height: 50px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #30363d;
+  background: #161b22;
+}
+
+.findings-toolbar > input,
+.findings-toolbar > select {
+  height: 32px;
+  border: 1px solid #30363d;
+  border-radius: 0;
+  outline: 0;
+  color: #c9d1d9;
+  background: #0d1117;
+  padding: 0 9px;
+  font-size: 10px;
+}
+
+.findings-toolbar > input {
+  width: 230px;
+}
+
+.findings-toolbar > select {
+  width: 150px;
+}
+
+.findings-patch-composer {
+  margin-left: auto;
+}
+
+.findings-patch-composer .patch-generation-actions {
+  flex-direction: row;
+}
+
+.findings-patch-composer .patch-composer-help {
+  display: none;
+}
+
+.finding-table-wrap {
+  overflow-x: auto;
+}
+
+.finding-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: #8b949e;
+  font-size: 10px;
+}
+
+.finding-table th,
+.finding-table td {
+  padding: 10px;
+  border-bottom: 1px solid #21262d;
+  text-align: left;
+  vertical-align: top;
+}
+
+.finding-table th {
+  color: #8b949e;
+  background: #0d1117;
+  font-size: 9px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.finding-table tbody tr:hover {
+  background: #161b22;
+}
+
+.finding-table td:nth-child(1) {
+  width: 50px;
+  text-align: center;
+}
+
+.finding-table td:nth-child(2) {
+  min-width: 270px;
+}
+
+.finding-table td > button {
+  padding: 0;
+  display: block;
+  color: #c9d1d9;
+  background: transparent;
+  text-align: left;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.finding-table td > button:hover {
+  color: #58a6ff;
+}
+
+.finding-table small {
+  max-width: 480px;
+  margin-top: 5px;
+  display: block;
+  overflow: hidden;
+  color: #6e7681;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.finding-table code {
+  color: #8b949e;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.finding-table input {
+  accent-color: #2f81f7;
+}
+
+@media (max-width: 1000px) {
+  .detail-metric-row {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .detail-metric-row > div:nth-child(3) {
+    border-right: 0;
+  }
+
+  .detail-metric-row > div:nth-child(-n + 3) {
+    border-bottom: 1px solid #30363d;
+  }
+
+  .findings-toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .findings-patch-composer {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 700px) {
+  .analysis-detail-page {
+    width: min(100% - 20px, 1540px);
+  }
+
+  .detail-metric-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .detail-metric-row > div:nth-child(odd) {
+    border-right: 1px solid #30363d;
+  }
+
+  .detail-metric-row > div:nth-child(even) {
+    border-right: 0;
+  }
+
+  .overview-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .findings-toolbar > input,
+  .findings-toolbar > select {
+    width: 100%;
+  }
+
+  .findings-patch-composer .patch-generation-actions {
+    flex-direction: column;
+  }
+}

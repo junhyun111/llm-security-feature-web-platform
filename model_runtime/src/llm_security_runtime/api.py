@@ -171,6 +171,50 @@ def create_runtime_app(
                 detail=str(error),
             ) from error
 
+    @app.get("/api/jobs/{job_id}/files")
+    def list_project_files(
+        job_id: str,
+        version: str = "original",
+    ) -> list[dict]:
+        try:
+            return service.list_project_files(job_id, version=version)
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(status_code=404, detail="Project source not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.get("/api/jobs/{job_id}/files/content")
+    def get_project_file(
+        job_id: str,
+        path: str,
+        version: str = "original",
+    ) -> dict:
+        try:
+            return service.get_project_file(job_id, path, version=version)
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(status_code=404, detail="Source file not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.get("/api/jobs/{job_id}/patches/{patch_id}/preview/content")
+    def get_patch_preview_file(
+        job_id: str,
+        patch_id: str,
+        path: str,
+    ) -> dict:
+        try:
+            return service.get_patch_preview_file(job_id, patch_id, path)
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(status_code=404, detail="Patch preview not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
     @app.post("/api/jobs/{job_id}/patches/proposal")
     def propose_patch_batch(
         job_id: str,

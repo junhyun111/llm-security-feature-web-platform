@@ -35,6 +35,7 @@ export type Dashboard = {
 export type FindingBundle = {
   finding: {
     finding_id: string
+    candidate_id: string
     title: string
     file: string
     line_start: number
@@ -42,8 +43,17 @@ export type FindingBundle = {
     function: string
     root_cause: string
     consequence: string
+    confidence?: number
+    source?: string | null
+    sink?: string | null
+    missing_guard?: string | null
+    trigger_path?: string[]
+    preconditions?: string[]
+    evidence_for?: string[]
     expert?: string
     supporting_experts?: string[]
+    supporting_models?: string[]
+    model_id?: string | null
     cwes?: string[]
     evidence_ids?: string[]
     evidence_against?: string[]
@@ -51,15 +61,64 @@ export type FindingBundle = {
   validation: {
     verdict: string
     confidence: number
+    checks?: Record<string, boolean | null>
     reasons?: string[]
+    model_used?: string | null
   }
   candidate?: {
+    candidate_id?: string
+    suspicion_score?: number
+    static_score?: number
+    features?: Record<string, number>
     cwe_hypotheses?: Array<{
       cwe: string
       confidence: number
       reasons?: string[]
     }>
   }
+}
+
+export type ProjectFileSummary = {
+  path: string
+  name: string
+  language: 'c' | 'cpp' | string
+  size: number
+  finding_count: number
+  version: string
+}
+
+export type ProjectFileContent = ProjectFileSummary & {
+  content: string
+  findings: FindingBundle[]
+}
+
+export type RouteDecision = {
+  candidate_id: string
+  scores: Record<string, number>
+  selected: string[]
+  top1_confidence: number
+  top1_top2_margin: number
+  policy: string
+  reasons: string[]
+  available_families?: string[]
+  learned_scores?: Record<string, number>
+  trigger_scores?: Record<string, number>
+  expected_cost?: number
+  ranked_experts?: string[]
+  top2_experts?: string[]
+  escalation_confidence?: number | null
+  escalated?: boolean
+  escalation_method?: string | null
+}
+
+export type UsageRecord = {
+  model: string
+  provider?: string | null
+  prompt_tokens: number
+  completion_tokens: number
+  reasoning_tokens?: number
+  cost: number
+  latency_seconds: number
 }
 
 export type PatchBatch = {
@@ -80,8 +139,14 @@ export type AnalysisPayload = {
     total_cost: number
     request_count: number
     submitted_expert_task_count: number
+    skipped_expert_task_count?: number
+    expert_task_count?: number
+    pre_gate_candidate_count?: number
   }
   findings: FindingBundle[]
+  routes?: RouteDecision[]
+  usage?: UsageRecord[]
+  errors?: string[]
   patch_batch?: PatchBatch | null
 }
 

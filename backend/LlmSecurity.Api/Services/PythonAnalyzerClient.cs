@@ -102,6 +102,52 @@ public class PythonAnalyzerClient
         return await response.Content.ReadAsStringAsync(cancellationToken);
     }
 
+    public async Task<string> GetProjectFilesJsonAsync(
+        string analyzerJobId,
+        string version,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.GetAsync(
+            $"/api/jobs/{Uri.EscapeDataString(analyzerJobId)}/files" +
+            $"?version={Uri.EscapeDataString(version)}",
+            cancellationToken);
+
+        await EnsureSuccess(response, cancellationToken);
+        return await response.Content.ReadAsStringAsync(cancellationToken);
+    }
+
+    public async Task<string> GetProjectFileJsonAsync(
+        string analyzerJobId,
+        string path,
+        string version,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.GetAsync(
+            $"/api/jobs/{Uri.EscapeDataString(analyzerJobId)}/files/content" +
+            $"?path={Uri.EscapeDataString(path)}" +
+            $"&version={Uri.EscapeDataString(version)}",
+            cancellationToken);
+
+        await EnsureSuccess(response, cancellationToken);
+        return await response.Content.ReadAsStringAsync(cancellationToken);
+    }
+
+    public async Task<string> GetPatchPreviewFileJsonAsync(
+        string analyzerJobId,
+        string patchId,
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.GetAsync(
+            $"/api/jobs/{Uri.EscapeDataString(analyzerJobId)}" +
+            $"/patches/{Uri.EscapeDataString(patchId)}/preview/content" +
+            $"?path={Uri.EscapeDataString(path)}",
+            cancellationToken);
+
+        await EnsureSuccess(response, cancellationToken);
+        return await response.Content.ReadAsStringAsync(cancellationToken);
+    }
+
     public async Task<string> ProposePatchAsync(
         string analyzerJobId,
         IReadOnlyList<string> findingIds,

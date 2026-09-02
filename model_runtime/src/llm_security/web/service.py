@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +34,15 @@ from ..verification import TemporaryPatchVerifier
 
 
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp"}
+SOURCE_LANGUAGES = {
+    ".c": "c",
+    ".h": "c",
+    ".cc": "cpp",
+    ".cpp": "cpp",
+    ".cxx": "cpp",
+    ".hh": "cpp",
+    ".hpp": "cpp",
+}
 IGNORED_SOURCE_DIRECTORIES = {
     ".git",
     ".venv",
@@ -493,6 +503,189 @@ class WebJobService:
                     archive.write(path, path.relative_to(source).as_posix())
         temporary.replace(destination)
         return destination
+
+    def list_project_files(
+        self,
+        job_id: str,
+        *,
+        version: str = "original",
+    ) -> list[dict]:
+        """List readable C/C++ sources without exposing the workspace path."""
+
+        root, normalized_version = self._project_version_root(job_id, version)
+        finding_counts: dict[str, int] = {}
+        for bundle in self._analysis_findings(job_id):
+            finding = bundle.get("finding", {})
+            path = str(finding.get("file", "")).replace("\\", "/")
+            if path:
+                finding_counts[path] = finding_counts.get(path, 0) + 1
+
+        files = []
+        for path in sorted(root.rglob("*")):
+            if (
+                not path.is_file()
+                or path.is_symlink()
+                or path.suffix.lower() not in SOURCE_SUFFIXES
+            ):
+                continue
+
+            relative = path.relative_to(root).as_posix()
+            if any(
+                part in IGNORED_SOURCE_DIRECTORIES
+                for part in PurePosixPath(relative).parts[:-1]
+            ):
+                continue
+            resolved = self._resolve_project_file(root, relative)
+            size = resolved.stat().st_size
+            if size > self.settings.max_source_file_bytes:
+                continue
+
+            files.append({
+                "path": relative,
+                "name": path.name,
+                "language": SOURCE_LANGUAGES[path.suffix.lower()],
+                "size": size,
+                "finding_count": finding_counts.get(relative, 0),
+                "version": normalized_version,
+            })
+        return files
+
+    def get_project_file(
+        self,
+        job_id: str,
+        relative_path: str,
+        *,
+        version: str = "original",
+    ) -> dict:
+        root, normalized_version = self._project_version_root(job_id, version)
+        return self._read_project_file(
+            job_id,
+            root,
+            relative_path,
+            version=normalized_version,
+        )
+
+    def get_patch_preview_file(
+        self,
+        job_id: str,
+        patch_id: str,
+        relative_path: str,
+    ) -> dict:
+        """Apply a proposed patch to an isolated temporary copy for DiffEditor."""
+
+        patch = self.get_patch_batch(job_id)
+        if patch is None or patch.patch_id != patch_id:
+            raise KeyError(patch_id)
+
+        if patch.status == "approved":
+            root, _ = self._project_version_root(job_id, "approved")
+            return self._read_project_file(
+                job_id,
+                root,
+                relative_path,
+                version="approved",
+            )
+        if patch.status != "proposed":
+            raise RuntimeError(f"Patch preview is unavailable for status {patch.status}")
+
+        job_directory = self._job_dir(job_id)
+        with tempfile.TemporaryDirectory(prefix="llm-security-preview-") as temporary:
+            temporary_root = Path(temporary)
+            preview_root = temporary_root / "project"
+            shutil.copytree(
+                job_directory / "input",
+                preview_root,
+                symlinks=False,
+            )
+            patch_file = temporary_root / "proposal.diff"
+            _write_text_lf(patch_file, patch.unified_diff)
+            _git_apply(preview_root, patch_file, check=True)
+            _git_apply(preview_root, patch_file, check=False)
+            return self._read_project_file(
+                job_id,
+                preview_root,
+                relative_path,
+                version="proposed",
+            )
+
+    def _project_version_root(
+        self,
+        job_id: str,
+        version: str,
+    ) -> tuple[Path, str]:
+        job_directory = self._job_dir(job_id)
+        normalized = version.strip().lower()
+        if normalized == "original":
+            root = job_directory / "input"
+        elif normalized in {"approved", "patched"}:
+            normalized = "approved"
+            root = job_directory / "approved"
+            if not root.is_dir():
+                raise RuntimeError("No approved project version is available")
+        else:
+            raise ValueError("version must be original or approved")
+
+        if not root.is_dir():
+            raise FileNotFoundError("Project source is unavailable")
+        return root.resolve(), normalized
+
+    def _read_project_file(
+        self,
+        job_id: str,
+        root: Path,
+        relative_path: str,
+        *,
+        version: str,
+    ) -> dict:
+        target = self._resolve_project_file(root, relative_path)
+        size = target.stat().st_size
+        if size > self.settings.max_source_file_bytes:
+            raise ValueError("Source file exceeds the configured viewer limit")
+
+        normalized_path = target.relative_to(root.resolve()).as_posix()
+        findings = [
+            bundle
+            for bundle in self._analysis_findings(job_id)
+            if str(bundle.get("finding", {}).get("file", "")).replace(
+                "\\", "/"
+            ) == normalized_path
+        ]
+        return {
+            "path": normalized_path,
+            "name": target.name,
+            "language": SOURCE_LANGUAGES[target.suffix.lower()],
+            "content": target.read_text(encoding="utf-8", errors="replace"),
+            "size": size,
+            "version": version,
+            "findings": findings,
+        }
+
+    def _resolve_project_file(self, root: Path, relative_path: str) -> Path:
+        safe_path = _safe_relative_path(relative_path)
+        if safe_path.suffix.lower() not in SOURCE_SUFFIXES:
+            raise ValueError("Only C/C++ source files can be viewed")
+
+        resolved_root = root.resolve()
+        candidate = resolved_root.joinpath(*safe_path.parts)
+        if candidate.is_symlink():
+            raise ValueError("Symbolic links cannot be viewed")
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(resolved_root):
+            raise ValueError("Invalid source path")
+        if not resolved.is_file():
+            raise FileNotFoundError(relative_path)
+        return resolved
+
+    def _analysis_findings(self, job_id: str) -> list[dict]:
+        analysis_path = self._job_dir(job_id) / "analysis.json"
+        if not analysis_path.is_file():
+            return []
+        try:
+            analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        findings = analysis.get("findings", [])
+        return findings if isinstance(findings, list) else []
 
     def _run_analysis(self, job_id: str) -> None:
         try:

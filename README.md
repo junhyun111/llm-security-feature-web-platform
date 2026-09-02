@@ -106,6 +106,18 @@ API Key는 브라우저에서 ASP.NET을 거쳐 내부 Runtime으로 전달되�
 
 현재 Router가 학습된 권장 모델은 Runtime artifact 메타데이터에서 자동으로 표시합니다. 다른 OpenRouter 텍스트 모델도 실행할 수 있지만 UI에 `Router 성능 미검증`으로 표시됩니다.
 
+## 분석 결과 워크벤치
+
+완료된 분석의 `Code` 탭은 배포본에 포함된 Monaco Editor를 사용하며 외부 CDN에 의존하지 않습니다.
+
+- 프로젝트 파일 트리와 C/C++ 구문 강조
+- 취약점 라인·거터 마커, hover 요약, Problems 목록
+- CWE, 검증 결과, 신뢰도, Expert 근거를 보여주는 Finding Inspector
+- 승인 전 임시 복사본에만 패치를 적용하는 원본/수정본 Diff Editor
+- 실제 저장된 Router 점수, Expert 선택, Validator 결과, 모델 사용량을 보여주는 Analysis Trace
+
+폴더 업로드 시 `.c`, `.cc`, `.cpp`, `.cxx`, `.h`, `.hh`, `.hpp`만 전송됩니다. `.git`, `node_modules`, `build`, `dist`, `out`, `vendor`, `.venv`, `__pycache__` 안의 파일과 5MB를 넘는 개별 소스 파일은 브라우저에서 제외됩니다.
+
 ## SQLite와 영구 데이터
 
 SQLite 스키마는 시작 시 EF Core Migration으로 자동 갱신됩니다.

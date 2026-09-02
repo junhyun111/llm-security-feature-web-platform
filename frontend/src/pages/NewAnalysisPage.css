@@ -37,6 +37,45 @@
 .analysis-selection-card {
   width: 100%;
   margin-top: 26px;
+  grid-template-columns: 1.6fr .7fr .7fr .7fr;
+}
+
+.selection-danger {
+  color: var(--danger);
+}
+
+.excluded-file-summary {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 11px;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border: 1px solid rgba(210, 153, 34, .24);
+  color: #d29922;
+  background: rgba(210, 153, 34, .06);
+  text-align: left;
+}
+
+.excluded-file-summary svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.excluded-file-summary strong,
+.excluded-file-summary span {
+  display: block;
+}
+
+.excluded-file-summary strong {
+  color: #f0b45b;
+  font-size: 10px;
+}
+
+.excluded-file-summary span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 9px;
 }
 
 .analysis-empty-project {
@@ -86,10 +125,10 @@
   flex: 0 0 38px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(94, 224, 174, 0.14);
+  border: 1px solid rgba(47, 129, 247, 0.14);
   border-radius: 10px;
   color: var(--accent);
-  background: rgba(94, 224, 174, 0.07);
+  background: rgba(47, 129, 247, 0.07);
 }
 
 .analysis-setting-block {
@@ -123,10 +162,10 @@
 .sensitivity-value {
   min-width: 52px;
   padding: 6px 8px;
-  border: 1px solid rgba(94, 224, 174, 0.16);
+  border: 1px solid rgba(47, 129, 247, 0.16);
   border-radius: 8px;
   color: var(--accent);
-  background: rgba(94, 224, 174, 0.06);
+  background: rgba(47, 129, 247, 0.06);
   text-align: center;
   font-size: 12px;
 }
@@ -159,7 +198,7 @@
   padding: 3px 7px;
   border-radius: 999px;
   color: var(--accent);
-  background: rgba(94, 224, 174, 0.06);
+  background: rgba(47, 129, 247, 0.06);
   text-align: center;
   font-weight: 700;
 }
@@ -191,8 +230,8 @@ select.analysis-control {
 }
 
 .analysis-control:focus {
-  border-color: rgba(94, 224, 174, 0.55);
-  box-shadow: 0 0 0 3px rgba(94, 224, 174, 0.06);
+  border-color: rgba(47, 129, 247, 0.55);
+  box-shadow: 0 0 0 3px rgba(47, 129, 247, 0.06);
 }
 
 .analysis-custom-model {
