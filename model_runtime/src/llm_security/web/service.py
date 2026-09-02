@@ -84,6 +84,8 @@ class WebSettings:
     max_concurrent_expert_requests: int = 100
     expert_recovery_attempts: int = 1
     detection_max_output_tokens: int = 16_384
+    patch_max_output_tokens: int = 16_384
+    patch_recovery_attempts: int = 1
     patch_max_prompt_characters: int = 120_000
     max_patch_regenerations: int = 5
     env_file: Path = Path(".env")
@@ -130,6 +132,13 @@ class WebSettings:
             ),
             detection_max_output_tokens=int(
                 values.get("WEB_DETECTION_MAX_OUTPUT_TOKENS", "16384")
+            ),
+            patch_max_output_tokens=int(
+                values.get("WEB_PATCH_MAX_OUTPUT_TOKENS", "16384")
+            ),
+            patch_recovery_attempts=max(
+                0,
+                min(2, int(values.get("WEB_PATCH_RECOVERY_ATTEMPTS", "1"))),
             ),
             patch_max_prompt_characters=int(
                 values.get("WEB_PATCH_MAX_PROMPT_CHARACTERS", "120000")
@@ -354,6 +363,7 @@ class WebJobService:
                 raise ValueError("Rejected findings cannot be patched")
 
         config = AppConfig.from_env(self.settings.env_file)
+        config.model.max_output_tokens = self.settings.patch_max_output_tokens
         if not config.runtime.allow_paid_experiments:
             raise RuntimeError(
                 "Patch generation calls OpenRouter; set RUN_PAID_EXPERIMENTS=1"

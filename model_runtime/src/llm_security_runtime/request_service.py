@@ -310,6 +310,9 @@ class RequestAwareWebJobService(WebJobService):
             api_key=api_key,
             router_validated=prior_options.router_validated,
         ))
+        # Patch generation has a larger, independent output budget than analysis.
+        # Without this override ModelConfig's conservative 2,500-token default is used.
+        config.model.max_output_tokens = self.settings.patch_max_output_tokens
 
         with self._lock:
             existing = self.get_patch_batch(job_id)
@@ -334,11 +337,39 @@ class RequestAwareWebJobService(WebJobService):
             for bundle in bundles
         ]
 
-        proposal = LLMBatchPatchAgent(
+        proposal_agent = LLMBatchPatchAgent(
             build_openrouter_client(config),
             config.model.patch_model,
             max_prompt_characters=self.settings.patch_max_prompt_characters,
-        ).propose(items)
+        )
+        proposal = None
+        last_error: Exception | None = None
+        for attempt in range(self.settings.patch_recovery_attempts + 1):
+            try:
+                proposal = proposal_agent.propose(items)
+                break
+            except RuntimeError as error:
+                last_error = error
+                message = str(error).lower()
+                if attempt >= self.settings.patch_recovery_attempts or not (
+                    "finish_reason=length" in message
+                    or "incomplete or invalid json" in message
+                    or "output-token" in message
+                ):
+                    raise
+                # A truncated structured response cannot be repaired locally. Retry once
+                # with a larger budget while keeping reasoning disabled by the web defaults.
+                config.model.max_output_tokens = min(
+                    32_768,
+                    max(config.model.max_output_tokens * 2, 1),
+                )
+                proposal_agent = LLMBatchPatchAgent(
+                    build_openrouter_client(config),
+                    config.model.patch_model,
+                    max_prompt_characters=self.settings.patch_max_prompt_characters,
+                )
+        if proposal is None:
+            raise last_error or RuntimeError("Patch generation failed")
 
         approved_files = {finding.file for finding, _, _ in items}
         validate_patch_scope_for_files(proposal.unified_diff, approved_files)
