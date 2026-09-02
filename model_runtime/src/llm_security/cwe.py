@@ -51,6 +51,34 @@ def cwe_categories(cwes: list[str]) -> set[str]:
     }
 
 
+# Causal families are intentionally finer than Expert domains. In particular,
+# E3 integer analysis must not merge division-by-zero with overflow, and E1
+# memory analysis must not merge double-free with use-after-free.
+CWE_FAMILIES = {
+    "CWE-369": "division_by_zero",
+    "CWE-190": "integer_arithmetic",
+    "CWE-191": "integer_arithmetic",
+    "CWE-195": "integer_arithmetic",
+    "CWE-681": "integer_arithmetic",
+    "CWE-415": "double_free",
+    "CWE-416": "use_after_free",
+    "CWE-120": "buffer_bounds",
+    "CWE-121": "buffer_bounds",
+    "CWE-122": "buffer_bounds",
+    "CWE-125": "buffer_bounds",
+    "CWE-787": "buffer_bounds",
+    "CWE-476": "null_dereference",
+}
+
+
+def causal_cwe_family(value: str) -> str:
+    normalized = normalize_cwe(value)
+    if normalized in CWE_FAMILIES:
+        return CWE_FAMILIES[normalized]
+    category = cwe_category(normalized)
+    return category or f"cwe:{normalized or value.strip().upper()}"
+
+
 def expert_for_cwe(cwe: str) -> ExpertFamily | None:
     return {
         "memory_spatial": ExpertFamily.MEMORY_SAFETY,

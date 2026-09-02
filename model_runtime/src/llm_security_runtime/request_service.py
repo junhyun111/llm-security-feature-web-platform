@@ -216,6 +216,10 @@ class RequestAwareWebJobService(WebJobService):
                 "expert_task_count": result.expert_task_count,
                 "submitted_expert_task_count": result.submitted_expert_task_count,
                 "skipped_expert_task_count": result.skipped_expert_task_count,
+                "structural_rejected_count": sum(
+                    item.verdict == ValidationVerdict.REJECTED
+                    for item in result.structural_validations
+                ),
                 "detection_call_limit": 1,
                 "request_settings": {
                     **options.safe_metadata(),
@@ -226,6 +230,9 @@ class RequestAwareWebJobService(WebJobService):
             },
             "findings": bundles,
             "routes": [to_dict(item) for item in result.routes],
+            "structural_validations": [
+                to_dict(item) for item in result.structural_validations
+            ],
             "errors": result.errors,
             "usage": [to_dict(item) for item in result.usage],
         }

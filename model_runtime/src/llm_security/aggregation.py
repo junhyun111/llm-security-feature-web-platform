@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from .cwe import causal_cwe_family
 from .models import Finding
 
 
@@ -20,28 +21,20 @@ class FindingAggregator:
         return aggregated
 
     def _aggregate_bucket(self, findings: list[Finding]) -> list[Finding]:
-        parents = list(range(len(findings)))
+        ordered = sorted(findings, key=lambda item: item.confidence, reverse=True)
+        groups: list[list[Finding]] = []
 
-        def root(index: int) -> int:
-            while parents[index] != index:
-                parents[index] = parents[parents[index]]
-                index = parents[index]
-            return index
+        for finding in ordered:
+            for group in groups:
+                # Compare with the strongest representative only. This deliberately
+                # prevents A<->B and B<->C from transitively merging A+B+C.
+                if _causally_related(group[0], finding):
+                    group.append(finding)
+                    break
+            else:
+                groups.append([finding])
 
-        def union(left: int, right: int) -> None:
-            left_root, right_root = root(left), root(right)
-            if left_root != right_root:
-                parents[right_root] = left_root
-
-        for left in range(len(findings)):
-            for right in range(left + 1, len(findings)):
-                if _causally_related(findings[left], findings[right]):
-                    union(left, right)
-
-        groups: dict[int, list[Finding]] = defaultdict(list)
-        for index, finding in enumerate(findings):
-            groups[root(index)].append(finding)
-        return [self._fuse(group) for group in groups.values()]
+        return [self._fuse(group) for group in groups]
 
     @staticmethod
     def _fuse(group: list[Finding]) -> Finding:
@@ -59,16 +52,24 @@ class FindingAggregator:
                 or ([item.model_id] if item.model_id else [])
             )
         }
-        primary.cwes = sorted({cwe for item in group for cwe in item.cwes})
+        primary_family = _vulnerability_family(primary)
+        compatible_cwes = {
+            cwe
+            for item in group
+            for cwe in item.cwes
+            if _cwe_family(cwe) == primary_family
+        }
+        if compatible_cwes:
+            primary.cwes = sorted(compatible_cwes)
         primary.evidence_ids = sorted(
             {evidence_id for item in group for evidence_id in item.evidence_ids}
         )
         primary.evidence_for = list(
             dict.fromkeys(value for item in group for value in item.evidence_for)
         )
-        primary.evidence_against = list(
-            dict.fromkeys(value for item in group for value in item.evidence_against)
-        )
+        # Counter-evidence belongs to the Validator/Falsification Critic. Discard
+        # legacy Expert-authored values before final validation.
+        primary.evidence_against = []
         primary.preconditions = list(
             dict.fromkeys(value for item in group for value in item.preconditions)
         )
@@ -83,12 +84,18 @@ class FindingAggregator:
             1.0,
             max(item.confidence for item in group) + agreement_bonus + diversity_bonus,
         )
-        primary.line_start = min(item.line_start for item in group)
-        primary.line_end = max(item.line_end for item in group)
+        intersection_start = max(item.line_start for item in group)
+        intersection_end = min(item.line_end for item in group)
+        if intersection_start <= intersection_end:
+            primary.line_start = intersection_start
+            primary.line_end = intersection_end
         return primary
 
 
 def _causally_related(left: Finding, right: Finding) -> bool:
+    if _vulnerability_family(left) != _vulnerability_family(right):
+        return False
+
     overlap = (
         left.line_start <= right.line_end + 2
         and right.line_start <= left.line_end + 2
@@ -98,9 +105,30 @@ def _causally_related(left: Finding, right: Finding) -> bool:
         and right.sink
         and _normalize(left.sink) == _normalize(right.sink)
     )
-    shared_evidence = bool(set(left.evidence_ids) & set(right.evidence_ids))
-    shared_path = bool(set(left.trigger_path) & set(right.trigger_path))
-    return overlap or same_sink or shared_evidence or shared_path
+    left_evidence = set(left.evidence_ids)
+    right_evidence = set(right.evidence_ids)
+    shared_evidence = left_evidence & right_evidence
+    evidence_overlap = len(shared_evidence) / max(
+        1,
+        min(len(left_evidence), len(right_evidence)),
+    )
+    return overlap and (same_sink or evidence_overlap >= 0.5)
+
+
+def _vulnerability_family(finding: Finding) -> str:
+    families = {_cwe_family(cwe) for cwe in finding.cwes if cwe}
+    if len(families) == 1:
+        return next(iter(families))
+    if families:
+        # Mixed-family reports are suspicious. They may merge only with a report
+        # carrying the exact same family set, never with one of their components.
+        return "mixed:" + ",".join(sorted(families))
+    title = _normalize(finding.title)
+    return f"unclassified:{title or finding.finding_id}"
+
+
+def _cwe_family(cwe: str) -> str:
+    return causal_cwe_family(cwe)
 
 
 def _normalize(value: str) -> str:

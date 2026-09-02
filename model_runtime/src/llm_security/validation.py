@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from .cwe import cwes_supported_by_evidence
+from .cwe import causal_cwe_family, cwes_supported_by_evidence
 from .evidence import _separate_cpp_comments
 from .llm import LLMClient
 from .models import (
@@ -72,6 +72,9 @@ class EvidenceValidator:
         results: list[ValidationResult] = []
         usage: list[UsageRecord] = []
         for finding in findings:
+            # Expert output must not define counter-evidence. The deterministic
+            # validator or falsification critic owns this field.
+            finding.evidence_against = []
             candidate = by_id[finding.candidate_id]
             result = self.validate(finding, candidate)
             should_falsify = (
@@ -103,40 +106,57 @@ class EvidenceValidator:
             results.append(result)
         return results, usage
 
-    def validate(self, finding: Finding, candidate: Candidate) -> ValidationResult:
-        evidence_ids = {item.evidence_id for item in candidate.evidence}
-        cited_evidence = [
-            item for item in candidate.evidence if item.evidence_id in finding.evidence_ids
-        ]
-        checks: dict[str, bool | None] = {
-            "file_matches": finding.file == candidate.file,
-            "function_matches": finding.function == candidate.function,
-            "line_reachable": (
-                finding.line_start <= candidate.line_end
-                and finding.line_end >= candidate.line_start
-            ),
-            "evidence_exists": bool(finding.evidence_ids),
-            "evidence_ids_valid": set(finding.evidence_ids).issubset(evidence_ids),
-            "cwe_present": bool(finding.cwes),
-            "cwe_semantics_supported": cwes_supported_by_evidence(
-                finding.cwes, cited_evidence
-            ),
-            "confidence_sufficient": (
-                finding.confidence >= self.confidence_threshold_for(finding.expert)
-            ),
-            "contradicting_guard": self._has_contradicting_guard(finding, candidate),
-        }
-        reasons: list[str] = []
+    def validate_structure(
+        self,
+        finding: Finding,
+        candidate: Candidate,
+    ) -> ValidationResult:
+        checks = self._checks(finding, candidate)
         hard_checks = [
             "file_matches",
             "function_matches",
             "line_reachable",
             "evidence_exists",
             "evidence_ids_valid",
+            "cwe_scope_bounded",
+            "cwe_family_coherent",
         ]
+        failed = [name for name in hard_checks if not bool(checks[name])]
+        if failed:
+            verdict = ValidationVerdict.REJECTED
+            reasons = [
+                "Aggregation 전 구조 검증에 실패했습니다: " + ", ".join(failed)
+            ]
+        else:
+            verdict = ValidationVerdict.VALIDATED
+            reasons = ["파일, 함수, 위치와 evidence 참조가 분석 후보와 일치합니다."]
+        return ValidationResult(
+            finding_id=finding.finding_id,
+            verdict=verdict,
+            confidence=None,
+            checks=checks,
+            reasons=reasons,
+        )
+
+    def validate(self, finding: Finding, candidate: Candidate) -> ValidationResult:
+        checks = self._checks(finding, candidate)
+        hard_checks = [
+            "file_matches",
+            "function_matches",
+            "line_reachable",
+            "evidence_exists",
+            "evidence_ids_valid",
+            "cwe_scope_bounded",
+            "cwe_family_coherent",
+        ]
+        reasons: list[str] = []
         if not all(bool(checks[name]) for name in hard_checks):
             verdict = ValidationVerdict.REJECTED
-            reasons.append("위치 또는 인용된 정적 근거를 확인할 수 없습니다.")
+            failed = [name for name in hard_checks if not bool(checks[name])]
+            reasons.append(
+                "위치 또는 인용된 정적 근거를 확인할 수 없습니다: "
+                + ", ".join(failed)
+            )
         elif checks["contradicting_guard"]:
             verdict = ValidationVerdict.REJECTED
             reasons.append("정적 guard가 보고된 보호 로직 누락 주장과 모순됩니다.")
@@ -163,10 +183,42 @@ class EvidenceValidator:
         return ValidationResult(
             finding_id=finding.finding_id,
             verdict=verdict,
-            confidence=finding.confidence,
+            confidence=None,
             checks=checks,
             reasons=reasons,
         )
+
+    def _checks(
+        self,
+        finding: Finding,
+        candidate: Candidate,
+    ) -> dict[str, bool | None]:
+        evidence_ids = {item.evidence_id for item in candidate.evidence}
+        cited_evidence = [
+            item for item in candidate.evidence if item.evidence_id in finding.evidence_ids
+        ]
+        return {
+            "file_matches": finding.file == candidate.file,
+            "function_matches": finding.function == candidate.function,
+            "line_reachable": (
+                finding.line_start <= candidate.line_end
+                and finding.line_end >= candidate.line_start
+            ),
+            "evidence_exists": bool(finding.evidence_ids),
+            "evidence_ids_valid": set(finding.evidence_ids).issubset(evidence_ids),
+            "cwe_present": bool(finding.cwes),
+            "cwe_scope_bounded": len(set(finding.cwes)) <= 5,
+            "cwe_family_coherent": len(
+                {causal_cwe_family(cwe) for cwe in finding.cwes}
+            ) <= 1,
+            "cwe_semantics_supported": cwes_supported_by_evidence(
+                finding.cwes, cited_evidence
+            ),
+            "confidence_sufficient": (
+                finding.confidence >= self.confidence_threshold_for(finding.expert)
+            ),
+            "contradicting_guard": self._has_contradicting_guard(finding, candidate),
+        }
 
     def confidence_threshold_for(self, expert: ExpertFamily) -> float:
         return self.minimum_confidence_by_expert.get(
@@ -260,9 +312,7 @@ class EvidenceValidator:
         )
         verdict = ValidationVerdict(response.data["verdict"])
         counter_evidence = [str(item) for item in response.data["evidence_against"]]
-        finding.evidence_against = list(
-            dict.fromkeys([*finding.evidence_against, *counter_evidence])
-        )
+        finding.evidence_against = list(dict.fromkeys(counter_evidence))
         return (
             ValidationResult(
                 finding_id=finding.finding_id,
@@ -310,6 +360,9 @@ class EvidenceValidator:
             messages=messages,
             response_schema=validation_schema(),
             metadata={"task": "strong_judge", "finding": finding, "candidate": candidate},
+        )
+        finding.evidence_against = list(
+            dict.fromkeys(str(item) for item in response.data["evidence_against"])
         )
         return (
             ValidationResult(

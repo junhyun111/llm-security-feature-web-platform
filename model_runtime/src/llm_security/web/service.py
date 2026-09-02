@@ -807,10 +807,17 @@ class WebJobService:
                 "expert_task_count": result.expert_task_count,
                 "submitted_expert_task_count": result.submitted_expert_task_count,
                 "skipped_expert_task_count": result.skipped_expert_task_count,
+                "structural_rejected_count": sum(
+                    item.verdict == ValidationVerdict.REJECTED
+                    for item in result.structural_validations
+                ),
                 "detection_call_limit": 1,
             },
             "findings": bundles,
             "routes": [to_dict(item) for item in result.routes],
+            "structural_validations": [
+                to_dict(item) for item in result.structural_validations
+            ],
             "errors": result.errors,
             "usage": [to_dict(item) for item in result.usage],
         }
@@ -1061,10 +1068,13 @@ def _finding_from_raw(raw: dict) -> Finding:
 
 
 def _validation_from_raw(raw: dict) -> ValidationResult:
+    raw_confidence = raw.get("confidence")
     return ValidationResult(
         finding_id=str(raw["finding_id"]),
         verdict=ValidationVerdict(raw["verdict"]),
-        confidence=float(raw["confidence"]),
+        confidence=(
+            None if raw_confidence is None else float(raw_confidence)
+        ),
         checks=dict(raw.get("checks", {})),
         reasons=[str(item) for item in raw.get("reasons", [])],
         model_used=raw.get("model_used"),

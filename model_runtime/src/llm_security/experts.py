@@ -39,7 +39,7 @@ class ExpertRunner:
         model: str,
         context_builder: ContextBuilder,
         models_by_family: dict[ExpertFamily, str] | None = None,
-        prompt_version: str = "expert-v5-proof-context",
+        prompt_version: str = "expert-v6-validator-counterevidence",
     ) -> None:
         self.client = client
         self.model = model
@@ -95,7 +95,7 @@ class ExpertRunner:
                                 candidate=candidate,
                                 expert=expert,
                                 model_id=assignment.model_id,
-                                prompt_version=assignment.prompt_version,
+                                prompt_version=self.prompt_version,
                             )
                         )
                 except (KeyError, TypeError, ValueError, RuntimeError) as error:
@@ -120,7 +120,7 @@ class BatchedExpertRunner:
     which guarantees at most one successful detection completion per run.
     """
 
-    prompt_version = "batched-expert-v5-ko-proof-context"
+    prompt_version = "batched-expert-v6-validator-counterevidence"
 
     def __init__(
         self,

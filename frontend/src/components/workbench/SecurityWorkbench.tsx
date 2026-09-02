@@ -354,7 +354,9 @@ export function SecurityWorkbench({
               <span className="problem-location">
                 {bundle.finding.file}:{bundle.finding.line_start}
               </span>
-              <strong>{percent(bundle.validation.confidence)}</strong>
+              <strong title="Detection confidence">
+                D {percent(bundle.finding.confidence)}
+              </strong>
             </button>
           ))}
           {!filteredFindings.length && (
@@ -433,10 +435,14 @@ function FindingInspector({
     <div className="finding-inspector-body">
       <div className="inspector-heading">
         <StatusBadge status={validation.verdict} />
-        <strong>{percent(validation.confidence)}</strong>
       </div>
       <h3>{finding.title}</h3>
       <code>{finding.file}:{finding.line_start}-{finding.line_end}</code>
+
+      <div className="inspector-confidence-grid">
+        <span>Detection confidence<strong>{percent(finding.confidence)}</strong></span>
+        <span>Validation confidence<strong>{validationConfidence(validation.confidence)}</strong></span>
+      </div>
 
       <div className="inspector-tags">
         {(finding.cwes || []).map((cwe) => <span key={cwe}>{cwe}</span>)}
@@ -458,6 +464,9 @@ function FindingInspector({
       {validation.reasons?.length ? (
         <InspectorList label="Validation reasons" values={validation.reasons} />
       ) : null}
+      {validation.checks && (
+        <ValidationChecks checks={validation.checks} compact />
+      )}
 
       {validated && (
         <label className="inspector-patch-toggle">
@@ -614,7 +623,10 @@ export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) 
   const routes = analysis.routes || []
   const [selectedId, setSelectedId] = useState(routes[0]?.candidate_id || '')
   const route = routes.find((item) => item.candidate_id === selectedId) || routes[0]
-  const bundle = analysis.findings.find((item) => item.finding.candidate_id === route?.candidate_id)
+  const routeBundles = analysis.findings.filter(
+    (item) => item.finding.candidate_id === route?.candidate_id
+  )
+  const bundle = routeBundles[0]
 
   return (
     <section className="trace-panel">
@@ -628,8 +640,35 @@ export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) 
           <span>Candidates <strong>{analysis.summary.candidate_count}</strong></span>
           <span>Expert tasks <strong>{analysis.summary.submitted_expert_task_count}</strong></span>
           <span>Requests <strong>{analysis.summary.request_count}</strong></span>
+          <span>Errors <strong>{analysis.errors?.length || 0}</strong></span>
         </div>
       </div>
+
+      {(analysis.errors?.length || 0) > 0 && (
+        <details className="trace-errors" open>
+          <summary>Pipeline errors ({analysis.errors?.length})</summary>
+          <ul>{analysis.errors?.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul>
+        </details>
+      )}
+
+      {(analysis.summary.structural_rejected_count || 0) > 0 && (
+        <details className="structural-rejection-notice">
+          <summary>
+            Aggregation 전에 구조가 맞지 않는 Expert finding {analysis.summary.structural_rejected_count}개를 격리했습니다.
+          </summary>
+          <div>
+            {(analysis.structural_validations || [])
+              .filter((item) => item.verdict === 'rejected')
+              .map((item) => (
+                <article key={item.finding_id}>
+                  <strong>{item.finding_id}</strong>
+                  <ValidationChecks checks={item.checks || {}} />
+                  <ul>{item.reasons.map((reason, index) => <li key={`${reason}-${index}`}>{reason}</li>)}</ul>
+                </article>
+              ))}
+          </div>
+        </details>
+      )}
 
       {routes.length ? (
         <div className="trace-layout">
@@ -652,8 +691,8 @@ export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) 
               <div className="trace-pipeline">
                 <TraceStep title="Static candidate" value={bundle?.finding.file || route.candidate_id} />
                 <TraceStep title="Utility Router" value={`${route.selected.length} expert selected`} />
-                <TraceStep title="LLM Expert" value={bundle?.finding.title || '검증 결과 없음'} />
-                <TraceStep title="Validator" value={bundle?.validation.verdict || 'finding 미생성'} />
+                <TraceStep title="LLM Expert" value={`${routeBundles.length} independent finding(s)`} />
+                <TraceStep title="Validator" value={routeBundles.length ? '검증 완료' : 'finding 미생성'} />
               </div>
 
               <div className="router-score-panel">
@@ -677,6 +716,27 @@ export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) 
                   <div className="trace-reasons">
                     <h3>Decision reasons</h3>
                     <ul>{route.reasons.map((reason, index) => <li key={`${reason}-${index}`}>{reason}</li>)}</ul>
+                  </div>
+                )}
+
+                {routeBundles.length > 0 && (
+                  <div className="trace-validation-section">
+                    <h3>Validation checks</h3>
+                    {routeBundles.map((item) => (
+                      <article className="trace-validation-card" key={item.finding.finding_id}>
+                        <div>
+                          <strong>{item.finding.title}</strong>
+                          <StatusBadge status={item.validation.verdict} />
+                        </div>
+                        <p>
+                          Detection {percent(item.finding.confidence)} · Validation {validationConfidence(item.validation.confidence)}
+                        </p>
+                        <ValidationChecks checks={item.validation.checks || {}} />
+                        {item.validation.reasons?.length ? (
+                          <ul>{item.validation.reasons.map((reason, index) => <li key={`${reason}-${index}`}>{reason}</li>)}</ul>
+                        ) : null}
+                      </article>
+                    ))}
                   </div>
                 )}
               </div>
@@ -704,13 +764,29 @@ export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) 
         </table>
       </div>
 
-      {(analysis.errors?.length || 0) > 0 && (
-        <div className="trace-errors">
-          <h3>Pipeline errors</h3>
-          <ul>{analysis.errors?.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul>
-        </div>
-      )}
     </section>
+  )
+}
+
+function ValidationChecks({
+  checks,
+  compact = false
+}: {
+  checks: Record<string, boolean | null>
+  compact?: boolean
+}) {
+  return (
+    <div className={`validation-checks ${compact ? 'compact' : ''}`}>
+      {Object.entries(checks).map(([name, value]) => {
+        const passed = name === 'contradicting_guard' ? value === false : value === true
+        return (
+          <span className={passed ? 'passed' : value === null ? 'unknown' : 'failed'} key={name}>
+            {passed ? <CheckCircle2 size={12} /> : value === null ? <AlertTriangle size={12} /> : <XCircle size={12} />}
+            {name}
+          </span>
+        )
+      })}
+    </div>
   )
 }
 
@@ -764,7 +840,9 @@ function hoverMarkdown(bundle: FindingBundle) {
     `**${escapeMarkdown(finding.title)}**`,
     '',
     `- CWE: ${finding.cwes?.join(', ') || '미분류'}`,
-    `- 검증: ${validation.verdict} (${percent(validation.confidence)})`,
+    `- 탐지 신뢰도: ${percent(finding.confidence)}`,
+    `- 검증: ${validation.verdict}`,
+    `- 검증 신뢰도: ${validationConfidence(validation.confidence)}`,
     `- 전문가: ${experts.map(expertLabel).join(', ') || '-'}`,
     '',
     escapeMarkdown(finding.root_cause || '')
@@ -779,8 +857,12 @@ function clampLine(value: number, lineCount: number) {
   return Math.max(1, Math.min(lineCount, Number(value) || 1))
 }
 
-function percent(value: number) {
+function percent(value: number | null | undefined) {
   return `${Math.round((Number(value) || 0) * 100)}%`
+}
+
+function validationConfidence(value: number | null | undefined) {
+  return value === null || value === undefined ? '규칙 기반' : percent(value)
 }
 
 function scoreWidth(score: number, route: RouteDecision) {

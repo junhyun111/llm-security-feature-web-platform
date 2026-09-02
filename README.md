@@ -115,6 +115,8 @@ API Key는 브라우저에서 ASP.NET을 거쳐 내부 Runtime으로 전달되�
 - CWE, 검증 결과, 신뢰도, Expert 근거를 보여주는 Finding Inspector
 - 승인 전 임시 복사본에만 패치를 적용하는 원본/수정본 Diff Editor
 - 실제 저장된 Router 점수, Expert 선택, Validator 결과, 모델 사용량을 보여주는 Analysis Trace
+- 탐지 신뢰도와 검증 결과/검증 신뢰도를 분리하고 deterministic 검증은 `규칙 기반`으로 표시
+- Aggregation 전 구조 검증과 Validator hard check 결과를 Analysis Trace에 표시
 
 폴더 업로드 시 `.c`, `.cc`, `.cpp`, `.cxx`, `.h`, `.hh`, `.hpp`만 전송됩니다. `.git`, `node_modules`, `build`, `dist`, `out`, `vendor`, `.venv`, `__pycache__` 안의 파일과 5MB를 넘는 개별 소스 파일은 브라우저에서 제외됩니다.
 
@@ -194,4 +196,11 @@ dotnet list backend\LlmSecurity.Api\LlmSecurity.Api.csproj package --vulnerable 
 cd frontend
 npm ci
 npm run build
+```
+
+Aggregator와 검증 순서 회귀 테스트:
+
+```powershell
+$env:PYTHONPATH='model_runtime\src'
+.\.local-runtime-venv\Scripts\python.exe -m unittest discover -s model_runtime\tests -v
 ```

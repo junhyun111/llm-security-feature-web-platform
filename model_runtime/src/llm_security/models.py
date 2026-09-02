@@ -34,7 +34,7 @@ class ExpertAssignment:
 
     expert: ExpertFamily
     model_id: str
-    prompt_version: str = "expert-v5-proof-context"
+    prompt_version: str = "expert-v6-validator-counterevidence"
     expected_cost: float = 0.0
 
     @property
@@ -233,7 +233,9 @@ class Finding:
 class ValidationResult:
     finding_id: str
     verdict: ValidationVerdict
-    confidence: float
+    # None means a deterministic rule produced the verdict and did not estimate
+    # an independent validation probability.
+    confidence: float | None
     checks: dict[str, bool | None]
     reasons: list[str]
     model_used: str | None = None
@@ -258,6 +260,7 @@ class PipelineResult:
     findings: list[Finding]
     validations: list[ValidationResult]
     usage: list[UsageRecord]
+    structural_validations: list[ValidationResult] = field(default_factory=list)
     pre_gate_candidates: list[Candidate] = field(default_factory=list)
     gate_decisions: list[Any] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)

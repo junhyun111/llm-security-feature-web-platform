@@ -60,7 +60,8 @@ export type FindingBundle = {
   }
   validation: {
     verdict: string
-    confidence: number
+    /** Independent Validator confidence. Null means a deterministic rule verdict. */
+    confidence: number | null
     checks?: Record<string, boolean | null>
     reasons?: string[]
     model_used?: string | null
@@ -76,6 +77,15 @@ export type FindingBundle = {
       reasons?: string[]
     }>
   }
+}
+
+export type ValidationResult = {
+  finding_id: string
+  verdict: string
+  confidence: number | null
+  checks: Record<string, boolean | null>
+  reasons: string[]
+  model_used?: string | null
 }
 
 export type ProjectFileSummary = {
@@ -142,9 +152,11 @@ export type AnalysisPayload = {
     skipped_expert_task_count?: number
     expert_task_count?: number
     pre_gate_candidate_count?: number
+    structural_rejected_count?: number
   }
   findings: FindingBundle[]
   routes?: RouteDecision[]
+  structural_validations?: ValidationResult[]
   usage?: UsageRecord[]
   errors?: string[]
   patch_batch?: PatchBatch | null

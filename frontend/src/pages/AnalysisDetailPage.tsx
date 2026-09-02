@@ -326,8 +326,15 @@ function OverviewPanel({
             <div><dt>CWE hypotheses</dt><dd>{analysis.summary.cwe_hypothesis_count}</dd></div>
             <div><dt>Submitted expert tasks</dt><dd>{analysis.summary.submitted_expert_task_count}</dd></div>
             <div><dt>Skipped expert tasks</dt><dd>{analysis.summary.skipped_expert_task_count ?? 0}</dd></div>
+            <div><dt>Structural rejections</dt><dd>{analysis.summary.structural_rejected_count ?? 0}</dd></div>
             <div><dt>Pipeline errors</dt><dd>{analysis.errors?.length || 0}</dd></div>
           </dl>
+          {(analysis.errors?.length || 0) > 0 && (
+            <details className="overview-errors" open>
+              <summary>Pipeline errors 상세</summary>
+              <ul>{analysis.errors?.map((error, index) => <li key={`${error}-${index}`}>{error}</li>)}</ul>
+            </details>
+          )}
         </div>
         <div>
           <h2>Verdict distribution</h2>
@@ -381,7 +388,7 @@ function FindingsPanel({
       </div>
       <div className="finding-table-wrap">
         <table className="finding-table">
-          <thead><tr><th>Patch</th><th>Finding</th><th>CWE</th><th>Location</th><th>Expert</th><th>Verdict</th><th>Confidence</th></tr></thead>
+          <thead><tr><th>Patch</th><th>Finding</th><th>CWE</th><th>Location</th><th>Expert</th><th>Validation</th><th>Detection confidence</th><th>Validation confidence</th></tr></thead>
           <tbody>
             {filtered.map((bundle) => {
               const finding = bundle.finding
@@ -394,7 +401,8 @@ function FindingsPanel({
                   <td><code>{finding.file}:{finding.line_start}</code></td>
                   <td>{expertLabel(finding.expert || finding.supporting_experts?.[0] || '-')}</td>
                   <td><StatusBadge status={bundle.validation.verdict} /></td>
-                  <td><strong>{Math.round(bundle.validation.confidence * 100)}%</strong></td>
+                  <td><strong>{formatPercent(finding.confidence)}</strong></td>
+                  <td>{bundle.validation.confidence === null ? '규칙 기반' : formatPercent(bundle.validation.confidence)}</td>
                 </tr>
               )
             })}
@@ -416,4 +424,8 @@ function expertLabel(expert: string) {
     concurrency_toctou: 'E6 Concurrency / TOCTOU'
   }
   return labels[expert] || expert
+}
+
+function formatPercent(value: number | null | undefined) {
+  return `${Math.round((Number(value) || 0) * 100)}%`
 }

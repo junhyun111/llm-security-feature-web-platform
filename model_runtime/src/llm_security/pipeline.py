@@ -3,7 +3,12 @@ from __future__ import annotations
 from .aggregation import FindingAggregator
 from .analysis import CandidateAnalyzer
 from .experts import ExpertRunner
-from .models import PipelineResult, ProjectCase
+from .models import (
+    PipelineResult,
+    ProjectCase,
+    ValidationResult,
+    ValidationVerdict,
+)
 from .routing import CandidateGate, Router
 from .validation import EvidenceValidator
 
@@ -43,7 +48,38 @@ class VulnerabilityPipeline:
             candidates = candidates[: self.max_candidates]
         routes = [self.router.route(candidate) for candidate in candidates]
         expert_output = self.expert_runner.run(candidates, routes)
-        findings = self.aggregator.aggregate(expert_output.findings)
+        candidate_by_id = {
+            candidate.candidate_id: candidate
+            for candidate in candidates
+        }
+        structurally_valid = []
+        structural_validations: list[ValidationResult] = []
+        for finding in expert_output.findings:
+            candidate = candidate_by_id.get(finding.candidate_id)
+            if candidate is None:
+                preliminary = ValidationResult(
+                    finding_id=finding.finding_id,
+                    verdict=ValidationVerdict.REJECTED,
+                    confidence=None,
+                    checks={
+                        "file_matches": False,
+                        "function_matches": False,
+                        "line_reachable": False,
+                        "evidence_exists": bool(finding.evidence_ids),
+                        "evidence_ids_valid": False,
+                    },
+                    reasons=["Finding이 존재하지 않는 candidate를 참조합니다."],
+                )
+            else:
+                preliminary = self.validator.validate_structure(
+                    finding,
+                    candidate,
+                )
+            structural_validations.append(preliminary)
+            if preliminary.verdict != ValidationVerdict.REJECTED:
+                structurally_valid.append(finding)
+
+        findings = self.aggregator.aggregate(structurally_valid)
         validations, validator_usage = self.validator.validate_all(findings, candidates)
         return PipelineResult(
             case_id=case.case_id,
@@ -52,6 +88,7 @@ class VulnerabilityPipeline:
             findings=findings,
             validations=validations,
             usage=expert_output.usage + validator_usage,
+            structural_validations=structural_validations,
             pre_gate_candidates=pre_gate_candidates,
             gate_decisions=gate_decisions,
             errors=expert_output.errors,
