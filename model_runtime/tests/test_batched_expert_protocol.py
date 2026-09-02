@@ -223,9 +223,21 @@ class BatchedExpertProtocolTest(unittest.TestCase):
                 "summary": {
                     "expert_task_count": 20,
                     "submitted_expert_task_count": 20,
-                    "completed_expert_task_count": 8,
+                    "completed_expert_task_count": 17,
+                    "failed_expert_task_count": 3,
                 },
                 "errors": ["one batch failed"],
+            }
+        )
+        below_threshold = _analysis_outcome(
+            {
+                "summary": {
+                    "expert_task_count": 20,
+                    "submitted_expert_task_count": 20,
+                    "completed_expert_task_count": 15,
+                    "failed_expert_task_count": 5,
+                },
+                "errors": ["too many requests failed"],
             }
         )
         completed = _analysis_outcome(
@@ -241,6 +253,7 @@ class BatchedExpertProtocolTest(unittest.TestCase):
 
         self.assertEqual(JobStatus.FAILED, failed[0])
         self.assertEqual(JobStatus.PARTIAL, partial[0])
+        self.assertEqual(JobStatus.FAILED, below_threshold[0])
         self.assertEqual(JobStatus.COMPLETED, completed[0])
 
 

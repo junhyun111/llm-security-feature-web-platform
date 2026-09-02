@@ -99,5 +99,15 @@ class VulnerabilityPipeline:
                 "completed_task_count",
                 expert_output.submitted_task_count,
             ),
+            failed_expert_task_count=getattr(
+                expert_output,
+                "failed_task_count",
+                0,
+            ),
+            incomplete_candidate_count=getattr(
+                expert_output,
+                "incomplete_candidate_count",
+                0,
+            ),
             skipped_expert_task_count=expert_output.skipped_task_count,
         )

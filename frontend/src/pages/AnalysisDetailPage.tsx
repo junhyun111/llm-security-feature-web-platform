@@ -334,6 +334,9 @@ function OverviewPanel({
             <div><dt>Planned expert tasks</dt><dd>{analysis.summary.expert_task_count ?? analysis.summary.submitted_expert_task_count}</dd></div>
             <div><dt>Submitted expert tasks</dt><dd>{analysis.summary.submitted_expert_task_count}</dd></div>
             <div><dt>Completed expert tasks</dt><dd>{analysis.summary.completed_expert_task_count ?? analysis.summary.submitted_expert_task_count}</dd></div>
+            <div><dt>Failed expert tasks</dt><dd>{analysis.summary.failed_expert_task_count ?? 0}</dd></div>
+            <div><dt>Incomplete candidates</dt><dd>{analysis.summary.incomplete_candidate_count ?? 0}</dd></div>
+            <div><dt>Max concurrency</dt><dd>{analysis.summary.max_concurrent_expert_requests ?? '—'}</dd></div>
             <div><dt>Skipped expert tasks</dt><dd>{analysis.summary.skipped_expert_task_count ?? 0}</dd></div>
             <div><dt>Structural rejections</dt><dd>{analysis.summary.structural_rejected_count ?? 0}</dd></div>
             <div><dt>Pipeline errors</dt><dd>{analysis.errors?.length || 0}</dd></div>

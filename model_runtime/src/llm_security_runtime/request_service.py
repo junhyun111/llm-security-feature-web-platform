@@ -8,7 +8,7 @@ from typing import BinaryIO, Callable, Sequence
 
 from llm_security.config import AppConfig
 from llm_security.datasets import _candidate_from_raw
-from llm_security.factory import build_batched_web_pipeline, build_openrouter_client
+from llm_security.factory import build_openrouter_client, build_parallel_web_pipeline
 from llm_security.models import ProjectCase, ValidationVerdict, to_dict
 from llm_security.patching import LLMBatchPatchAgent
 from llm_security.verification import TemporaryPatchVerifier
@@ -16,6 +16,7 @@ from llm_security.web.service import (
     PatchBatchRecord,
     WebJobService,
     WebSettings,
+    _expert_progress_callback,
     _finding_bundle,
     _finding_from_raw,
     _now,
@@ -144,7 +145,6 @@ class RequestAwareWebJobService(WebJobService):
         config.analysis.backend = "semantic"
         config.candidate_gate.enabled = self.settings.candidate_gate_enabled
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
-        config.runtime.max_retries = 3
 
         progress(20, "Loading C/C++ source files")
         source_files = load_project_sources(
@@ -164,12 +164,12 @@ class RequestAwareWebJobService(WebJobService):
             metadata={"source": "web-upload"},
         )
 
-        progress(40, "Running semantic analysis in bounded multi-Expert batches")
-        result = build_batched_web_pipeline(
+        progress(40, "Preparing parallel Candidate × Expert tasks")
+        result = build_parallel_web_pipeline(
             config,
             router,
-            max_batch_characters=self.settings.detection_max_prompt_characters,
-            max_batch_tasks=self.settings.detection_max_expert_tasks,
+            max_concurrency=self.settings.max_concurrent_expert_requests,
+            progress_callback=_expert_progress_callback(progress),
         ).run(case)
 
         progress(95, "Preparing evidence-grounded report")
@@ -216,13 +216,15 @@ class RequestAwareWebJobService(WebJobService):
                 "expert_task_count": result.expert_task_count,
                 "submitted_expert_task_count": result.submitted_expert_task_count,
                 "completed_expert_task_count": result.completed_expert_task_count,
+                "failed_expert_task_count": result.failed_expert_task_count,
+                "incomplete_candidate_count": result.incomplete_candidate_count,
                 "skipped_expert_task_count": result.skipped_expert_task_count,
                 "structural_rejected_count": sum(
                     item.verdict == ValidationVerdict.REJECTED
                     for item in result.structural_validations
                 ),
-                "detection_max_tasks_per_request": (
-                    self.settings.detection_max_expert_tasks
+                "max_concurrent_expert_requests": (
+                    self.settings.max_concurrent_expert_requests
                 ),
                 "request_settings": {
                     **options.safe_metadata(),
@@ -271,8 +273,6 @@ class RequestAwareWebJobService(WebJobService):
             api_key=api_key,
             router_validated=prior_options.router_validated,
         ))
-
-        config.runtime.max_retries = 3
 
         with self._lock:
             existing = self.get_patch_batch(job_id)

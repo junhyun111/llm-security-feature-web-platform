@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from .aggregation import FindingAggregator
 from .analysis import LearnedCandidateRanker, SemanticStaticAnalyzer
 from .config import AppConfig
 from .evidence import ContextBuilder
-from .experts import BatchedExpertRunner, ExpertRunner
+from .experts import (
+    BatchedExpertRunner,
+    ExpertProgress,
+    ExpertRunner,
+    ParallelExpertRunner,
+)
 from .llm import OpenRouterClient
 from .knowledge import LocalSecurityKnowledgeRetriever
 from .pipeline import VulnerabilityPipeline
@@ -152,6 +159,61 @@ def build_batched_web_pipeline(
             context_builder=build_context_builder(config),
             max_batch_characters=max_batch_characters,
             max_tasks=max_batch_tasks,
+        ),
+        aggregator=FindingAggregator(),
+        validator=EvidenceValidator(
+            minimum_confidence=config.validation.minimum_confidence,
+            minimum_confidence_by_expert=(
+                config.validation.minimum_confidence_by_expert
+            ),
+            client=None,
+            model=None,
+            strong_model=None,
+            use_llm_for_uncertain=False,
+            falsify_all_supported=False,
+        ),
+        candidate_gate=CandidateGate(
+            enabled=config.candidate_gate.enabled,
+            threshold=config.candidate_gate.threshold,
+        ),
+        max_candidates=config.analysis.max_candidates_per_project,
+    )
+
+
+def build_parallel_web_pipeline(
+    config: AppConfig,
+    router: Router,
+    *,
+    max_concurrency: int,
+    progress_callback: Callable[[ExpertProgress], None] | None = None,
+) -> VulnerabilityPipeline:
+    """Build the production web pipeline with one request per logical Expert."""
+
+    client = build_openrouter_client(config)
+    if isinstance(router, BudgetedUtilityRouter):
+        trained_models = {
+            assignment.model_id for assignment in router.assignments.values()
+        }
+        if config.model.expert_model in trained_models:
+            router.restrict_to_model(config.model.expert_model)
+        else:
+            # The learned Router still chooses logical Experts, while the
+            # request-selected model executes every independent task.
+            router.execution_model_id = None
+    analyzer = build_candidate_analyzer(
+        config,
+        require_ranker=isinstance(router, BudgetedUtilityRouter),
+    )
+    return VulnerabilityPipeline(
+        analyzer=analyzer,
+        router=router,
+        expert_runner=ParallelExpertRunner(
+            client=client,
+            model=config.model.expert_model,
+            context_builder=build_context_builder(config),
+            models_by_family=config.model.expert_models,
+            max_concurrency=max_concurrency,
+            progress_callback=progress_callback,
         ),
         aggregator=FindingAggregator(),
         validator=EvidenceValidator(

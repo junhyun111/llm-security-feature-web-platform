@@ -150,8 +150,11 @@ export type AnalysisPayload = {
     request_count: number
     submitted_expert_task_count: number
     completed_expert_task_count?: number
+    failed_expert_task_count?: number
+    incomplete_candidate_count?: number
     skipped_expert_task_count?: number
     expert_task_count?: number
+    max_concurrent_expert_requests?: number
     pre_gate_candidate_count?: number
     structural_rejected_count?: number
   }

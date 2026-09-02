@@ -267,6 +267,8 @@ class PipelineResult:
     expert_task_count: int = 0
     submitted_expert_task_count: int = 0
     completed_expert_task_count: int = 0
+    failed_expert_task_count: int = 0
+    incomplete_candidate_count: int = 0
     skipped_expert_task_count: int = 0
 
     @property

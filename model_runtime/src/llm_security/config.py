@@ -22,7 +22,7 @@ class ModelConfig:
     reasoning_effort: str | None = "medium"
     provider: str | None = None
     require_parameters: bool = True
-    allow_fallbacks: bool = False
+    allow_fallbacks: bool = True
     structured_output: bool = True
 
 
@@ -66,8 +66,8 @@ class ValidationConfig:
 @dataclass(slots=True)
 class RuntimeConfig:
     seed: int = 2026
-    request_timeout_seconds: float = 120.0
-    max_retries: int = 2
+    request_timeout_seconds: float = 90.0
+    max_retries: int = 1
     allow_paid_experiments: bool = False
     run_model_sweep: bool = False
 
@@ -129,7 +129,7 @@ class AppConfig:
                     values.get("OPENROUTER_REQUIRE_PARAMETERS", "true")
                 ),
                 allow_fallbacks=_as_bool(
-                    values.get("OPENROUTER_ALLOW_FALLBACKS", "false")
+                    values.get("OPENROUTER_ALLOW_FALLBACKS", "true")
                 ),
                 structured_output=_as_bool(
                     values.get("OPENROUTER_STRUCTURED_OUTPUT", "true")
@@ -185,8 +185,8 @@ class AppConfig:
             ),
             runtime=RuntimeConfig(
                 seed=int(values.get("EXPERIMENT_SEED", "2026")),
-                request_timeout_seconds=float(values.get("REQUEST_TIMEOUT_SECONDS", "120")),
-                max_retries=int(values.get("MAX_RETRIES", "2")),
+                request_timeout_seconds=float(values.get("REQUEST_TIMEOUT_SECONDS", "90")),
+                max_retries=int(values.get("MAX_RETRIES", "1")),
                 allow_paid_experiments=_as_bool(
                     values.get("RUN_PAID_EXPERIMENTS", "false")
                 ),
@@ -224,6 +224,10 @@ class AppConfig:
             raise ValueError("Candidate Ranker requires ANALYSIS_BACKEND=semantic")
         if not 0.0 <= self.validation.minimum_confidence <= 1.0:
             raise ValueError("MINIMUM_CONFIDENCE must be between 0 and 1")
+        if self.runtime.request_timeout_seconds <= 0:
+            raise ValueError("REQUEST_TIMEOUT_SECONDS must be positive")
+        if self.runtime.max_retries < 0:
+            raise ValueError("MAX_RETRIES cannot be negative")
         if any(
             not 0.0 <= value <= 1.0
             for value in self.validation.minimum_confidence_by_expert.values()

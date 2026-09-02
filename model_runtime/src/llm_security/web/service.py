@@ -19,7 +19,8 @@ from uuid import uuid4
 
 from ..config import AppConfig
 from ..datasets import _candidate_from_raw
-from ..factory import build_batched_web_pipeline, build_openrouter_client
+from ..experts import ExpertProgress
+from ..factory import build_openrouter_client, build_parallel_web_pipeline
 from ..models import (
     ExpertFamily,
     Finding,
@@ -78,13 +79,8 @@ class WebSettings:
     max_source_total_bytes: int = 100 * 1024 * 1024
     worker_count: int = 1
     candidate_gate_enabled: bool = True
-    detection_max_prompt_characters: int = 120_000
-    # Keep each structured-output request small enough for models to finish
-    # the complete JSON response. All tasks are split across as many bounded
-    # requests as needed. Per-request limits can be overridden through
-    # WEB_DETECTION_MAX_EXPERT_TASKS/WEB_DETECTION_MAX_OUTPUT_TOKENS.
-    detection_max_expert_tasks: int = 6
-    detection_max_output_tokens: int = 16_384
+    max_concurrent_expert_requests: int = 100
+    detection_max_output_tokens: int = 8_192
     patch_max_prompt_characters: int = 120_000
     env_file: Path = Path(".env")
 
@@ -112,14 +108,20 @@ class WebSettings:
             candidate_gate_enabled=_as_bool(
                 values.get("WEB_CANDIDATE_GATE_ENABLED", "true")
             ),
-            detection_max_prompt_characters=int(
-                values.get("WEB_DETECTION_MAX_PROMPT_CHARACTERS", "120000")
-            ),
-            detection_max_expert_tasks=int(
-                values.get("WEB_DETECTION_MAX_EXPERT_TASKS", "6")
+            max_concurrent_expert_requests=min(
+                100,
+                max(
+                    1,
+                    int(
+                        values.get(
+                            "WEB_MAX_CONCURRENT_EXPERT_REQUESTS",
+                            "100",
+                        )
+                    ),
+                ),
             ),
             detection_max_output_tokens=int(
-                values.get("WEB_DETECTION_MAX_OUTPUT_TOKENS", "16384")
+                values.get("WEB_DETECTION_MAX_OUTPUT_TOKENS", "8192")
             ),
             patch_max_prompt_characters=int(
                 values.get("WEB_PATCH_MAX_PROMPT_CHARACTERS", "120000")
@@ -301,7 +303,6 @@ class WebJobService:
             raise RuntimeError(
                 "Patch generation calls OpenRouter; set RUN_PAID_EXPERIMENTS=1"
             )
-        config.runtime.max_retries = 3
         with self._lock:
             existing = self.get_patch_batch(job_id)
             if existing is not None:
@@ -750,9 +751,6 @@ class WebJobService:
         config.analysis.backend = "semantic"
         config.candidate_gate.enabled = self.settings.candidate_gate_enabled
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
-        # A malformed provider response is not retried automatically. Distinct
-        # bounded Expert batches are still sent as separate requests.
-        config.runtime.max_retries = 3
         progress(20, "Loading C/C++ source files")
         source_files = load_project_sources(
             input_directory,
@@ -768,12 +766,12 @@ class WebJobService:
             split="unlabeled",
             metadata={"source": "web-upload"},
         )
-        progress(40, "Running semantic analysis in bounded multi-Expert batches")
-        result = build_batched_web_pipeline(
+        progress(40, "Preparing parallel Candidate × Expert tasks")
+        result = build_parallel_web_pipeline(
             config,
             router,
-            max_batch_characters=self.settings.detection_max_prompt_characters,
-            max_batch_tasks=self.settings.detection_max_expert_tasks,
+            max_concurrency=self.settings.max_concurrent_expert_requests,
+            progress_callback=_expert_progress_callback(progress),
         ).run(case)
         progress(95, "Preparing evidence-grounded report")
         candidates = {item.candidate_id: item for item in result.candidates}
@@ -816,13 +814,15 @@ class WebJobService:
                 "expert_task_count": result.expert_task_count,
                 "submitted_expert_task_count": result.submitted_expert_task_count,
                 "completed_expert_task_count": result.completed_expert_task_count,
+                "failed_expert_task_count": result.failed_expert_task_count,
+                "incomplete_candidate_count": result.incomplete_candidate_count,
                 "skipped_expert_task_count": result.skipped_expert_task_count,
                 "structural_rejected_count": sum(
                     item.verdict == ValidationVerdict.REJECTED
                     for item in result.structural_validations
                 ),
-                "detection_max_tasks_per_request": (
-                    self.settings.detection_max_expert_tasks
+                "max_concurrent_expert_requests": (
+                    self.settings.max_concurrent_expert_requests
                 ),
             },
             "findings": bundles,
@@ -946,6 +946,26 @@ def load_router_artifact(path: str | Path):
     raise TypeError("Unsupported Router artifact: " + " | ".join(errors))
 
 
+def _expert_progress_callback(
+    progress: Callable[[int, str], None],
+) -> Callable[[ExpertProgress], None]:
+    def report(state: ExpertProgress) -> None:
+        total = max(1, state.total_task_count)
+        percent = 45 + int(40 * state.finished_task_count / total)
+        progress(
+            min(85, percent),
+            (
+                "Parallel Expert analysis: "
+                f"{state.finished_task_count}/{state.total_task_count} finished, "
+                f"{state.successful_task_count} succeeded, "
+                f"{state.failed_task_count} failed, "
+                f"active {state.active_request_count}/{state.max_concurrency}"
+            ),
+        )
+
+    return report
+
+
 def _analysis_outcome(
     analysis: dict,
 ) -> tuple[JobStatus, str, str | None]:
@@ -969,6 +989,20 @@ def _analysis_outcome(
         0,
         int(summary.get("skipped_expert_task_count", 0) or 0),
     )
+    failed = max(
+        0,
+        int(
+            summary.get(
+                "failed_expert_task_count",
+                max(0, submitted - completed),
+            )
+            or 0
+        ),
+    )
+    incomplete_candidates = max(
+        0,
+        int(summary.get("incomplete_candidate_count", 0) or 0),
+    )
     raw_errors = analysis.get("errors", [])
     errors = (
         [str(item) for item in raw_errors if str(item).strip()]
@@ -976,10 +1010,12 @@ def _analysis_outcome(
         else [str(raw_errors)]
     )
 
-    if task_count > 0 and completed == 0:
+    success_ratio = completed / task_count if task_count else 1.0
+    if task_count > 0 and success_ratio < 0.80:
         detail = (
-            "Expert 응답을 어떤 작업에도 정상 귀속하지 못했습니다 "
-            f"(완료 0/{task_count}, 제출 {submitted}, 건너뜀 {skipped})."
+            "정상 처리된 Expert 작업이 80% 미만입니다 "
+            f"(성공 {completed}/{task_count}, 실패 {failed}, "
+            f"미완료 Candidate {incomplete_candidates})."
         )
         if errors:
             detail += " " + " | ".join(errors[:2])
@@ -988,7 +1024,8 @@ def _analysis_outcome(
     if completed < task_count or skipped > 0 or errors:
         detail = (
             "일부 Expert 작업만 정상 처리되었습니다 "
-            f"(완료 {completed}/{task_count}, 제출 {submitted}, 건너뜀 {skipped})."
+            f"(성공 {completed}/{task_count}, 실패 {failed}, "
+            f"미완료 Candidate {incomplete_candidates})."
         )
         if errors:
             detail += " " + " | ".join(errors[:2])

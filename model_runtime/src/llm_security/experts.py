@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .evidence import ContextBuilder
 from .llm import LLMClient
@@ -30,6 +31,8 @@ class ExpertRunOutput:
     task_count: int = 0
     submitted_task_count: int = 0
     completed_task_count: int = 0
+    failed_task_count: int = 0
+    incomplete_candidate_count: int = 0
     skipped_task_count: int = 0
 
 
@@ -114,6 +117,247 @@ class ExpertRunner:
             submitted_task_count=task_count,
             completed_task_count=completed_task_count,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ExpertTask:
+    task_id: str
+    candidate: Candidate
+    assignment: ExpertAssignment
+
+
+@dataclass(slots=True)
+class ExpertTaskResult:
+    task_id: str
+    candidate_id: str
+    findings: list[Finding]
+    usage: UsageRecord
+
+
+@dataclass(frozen=True, slots=True)
+class ExpertProgress:
+    finished_task_count: int
+    successful_task_count: int
+    failed_task_count: int
+    total_task_count: int
+    active_request_count: int
+    max_concurrency: int
+
+
+class ParallelExpertRunner:
+    """Run one independent OpenRouter request per Candidate × Expert task."""
+
+    prompt_version = "parallel-expert-v1"
+
+    def __init__(
+        self,
+        client: LLMClient,
+        model: str,
+        context_builder: ContextBuilder,
+        *,
+        models_by_family: dict[ExpertFamily, str] | None = None,
+        max_concurrency: int = 100,
+        progress_callback: Callable[[ExpertProgress], None] | None = None,
+    ) -> None:
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be positive")
+        self.client = client
+        self.model = model
+        self.context_builder = context_builder
+        self.models_by_family = dict(models_by_family or {})
+        self.max_concurrency = min(100, max_concurrency)
+        self.progress_callback = progress_callback
+
+    def run(
+        self,
+        candidates: list[Candidate],
+        routes: list[RouteDecision],
+    ) -> ExpertRunOutput:
+        tasks = self._build_tasks(candidates, routes)
+        total = len(tasks)
+        if not tasks:
+            self._notify_progress(
+                ExpertProgress(0, 0, 0, 0, 0, self.max_concurrency)
+            )
+            return ExpertRunOutput(findings=[], usage=[], errors=[])
+
+        results: dict[str, ExpertTaskResult] = {}
+        errors: dict[str, str] = {}
+        successful_candidates: set[str] = set()
+        successful = 0
+        failed = 0
+        finished = 0
+        worker_count = min(self.max_concurrency, total)
+        self._notify_progress(
+            ExpertProgress(0, 0, 0, total, worker_count, self.max_concurrency)
+        )
+
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="expert-request",
+        ) as executor:
+            futures = {
+                executor.submit(self._run_task, task): task
+                for task in tasks
+            }
+            for future in as_completed(futures):
+                task = futures[future]
+                try:
+                    result = future.result()
+                except Exception as error:  # isolate one remote Expert failure
+                    failed += 1
+                    errors[task.task_id] = (
+                        f"{task.task_id}/{task.candidate.candidate_id}/"
+                        f"{task.assignment.expert.value}/"
+                        f"{task.assignment.model_id}: {error}"
+                    )
+                else:
+                    successful += 1
+                    results[task.task_id] = result
+                    successful_candidates.add(result.candidate_id)
+
+                finished += 1
+                active = sum(
+                    pending.running()
+                    for pending in futures
+                )
+                self._notify_progress(
+                    ExpertProgress(
+                        finished,
+                        successful,
+                        failed,
+                        total,
+                        active,
+                        self.max_concurrency,
+                    )
+                )
+
+        findings: list[Finding] = []
+        usage: list[UsageRecord] = []
+        ordered_errors: list[str] = []
+        candidate_ids = {task.candidate.candidate_id for task in tasks}
+        for task in tasks:
+            result = results.get(task.task_id)
+            if result is not None:
+                findings.extend(result.findings)
+                usage.append(result.usage)
+            elif task.task_id in errors:
+                ordered_errors.append(errors[task.task_id])
+
+        return ExpertRunOutput(
+            findings=findings,
+            usage=usage,
+            errors=ordered_errors,
+            task_count=total,
+            submitted_task_count=total,
+            completed_task_count=successful,
+            failed_task_count=failed,
+            incomplete_candidate_count=len(
+                candidate_ids - successful_candidates
+            ),
+            skipped_task_count=0,
+        )
+
+    def _build_tasks(
+        self,
+        candidates: list[Candidate],
+        routes: list[RouteDecision],
+    ) -> list[ExpertTask]:
+        routes_by_id = {route.candidate_id: route for route in routes}
+        desired: dict[str, list[ExpertFamily]] = {}
+        for candidate in candidates:
+            route = routes_by_id[candidate.candidate_id]
+            desired[candidate.candidate_id] = list(
+                dict.fromkeys(
+                    assignment.expert for assignment in route.assignments
+                )
+            ) or list(dict.fromkeys(route.selected))
+
+        # Submit every candidate's Top-1 first, then Top-2, then escalation
+        # extras. ThreadPoolExecutor preserves this queue order when the number
+        # of tasks is larger than the concurrency cap.
+        ordered: list[tuple[Candidate, ExpertFamily]] = []
+        for rank in range(2):
+            ordered.extend(
+                (candidate, desired[candidate.candidate_id][rank])
+                for candidate in candidates
+                if len(desired[candidate.candidate_id]) > rank
+            )
+        extras = sorted(
+            [
+                (candidate, expert)
+                for candidate in candidates
+                for expert in desired[candidate.candidate_id][2:]
+            ],
+            key=lambda item: (
+                routes_by_id[item[0].candidate_id].escalation_confidence
+                if routes_by_id[item[0].candidate_id].escalation_confidence is not None
+                else 1.0,
+                -item[0].suspicion_score,
+                item[0].candidate_id,
+                item[1].value,
+            ),
+        )
+        ordered.extend(extras)
+
+        return [
+            ExpertTask(
+                task_id=f"T{index:05d}",
+                candidate=candidate,
+                assignment=ExpertAssignment(
+                    expert=expert,
+                    model_id=self.models_by_family.get(expert, self.model),
+                    prompt_version=self.prompt_version,
+                ),
+            )
+            for index, (candidate, expert) in enumerate(ordered, start=1)
+        ]
+
+    def _run_task(self, task: ExpertTask) -> ExpertTaskResult:
+        candidate = task.candidate
+        assignment = task.assignment
+        expert = assignment.expert
+        context = self.context_builder.build(candidate, expert)
+        response = self.client.complete(
+            model=assignment.model_id,
+            messages=expert_messages(candidate, context),
+            response_schema=findings_schema(),
+            metadata={
+                "task": "expert",
+                "task_id": task.task_id,
+                "candidate_id": candidate.candidate_id,
+                "expert": expert.value,
+            },
+        )
+        payloads = response.data.get("findings", [])
+        if not isinstance(payloads, list):
+            raise TypeError("The model response 'findings' field must be a list")
+        findings = [
+            finding_from_payload(
+                payload,
+                index=index,
+                candidate=candidate,
+                expert=expert,
+                model_id=response.usage.model,
+                prompt_version=assignment.prompt_version,
+            )
+            for index, payload in enumerate(payloads, start=1)
+        ]
+        return ExpertTaskResult(
+            task_id=task.task_id,
+            candidate_id=candidate.candidate_id,
+            findings=findings,
+            usage=response.usage,
+        )
+
+    def _notify_progress(self, state: ExpertProgress) -> None:
+        if self.progress_callback is None:
+            return
+        try:
+            self.progress_callback(state)
+        except Exception:
+            # Progress persistence must never invalidate paid analysis work.
+            pass
 
 
 @dataclass(slots=True)

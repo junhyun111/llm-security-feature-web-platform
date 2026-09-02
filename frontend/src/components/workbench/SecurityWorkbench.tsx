@@ -639,6 +639,8 @@ export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) 
         <div className="trace-summary">
           <span>Candidates <strong>{analysis.summary.candidate_count}</strong></span>
           <span>Expert tasks <strong>{analysis.summary.completed_expert_task_count ?? analysis.summary.submitted_expert_task_count}/{analysis.summary.expert_task_count ?? analysis.summary.submitted_expert_task_count}</strong></span>
+          <span>Failed <strong>{analysis.summary.failed_expert_task_count ?? 0}</strong></span>
+          <span>Concurrency <strong>{analysis.summary.max_concurrent_expert_requests ?? '—'}</strong></span>
           <span>Requests <strong>{analysis.summary.request_count}</strong></span>
           <span>Errors <strong>{analysis.errors?.length || 0}</strong></span>
         </div>

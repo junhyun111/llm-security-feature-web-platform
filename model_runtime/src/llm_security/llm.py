@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -34,15 +35,15 @@ class OpenRouterClient:
         self,
         *,
         api_key: str | None = None,
-        timeout_seconds: float = 120.0,
-        max_retries: int = 2,
+        timeout_seconds: float = 90.0,
+        max_retries: int = 1,
         temperature: float | None = None,
         max_output_tokens: int = 2500,
         reasoning_enabled: bool | None = None,
         reasoning_effort: str | None = None,
         provider: str | None = None,
         require_parameters: bool = True,
-        allow_fallbacks: bool = False,
+        allow_fallbacks: bool = True,
         structured_output: bool = True,
     ) -> None:
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
@@ -114,9 +115,21 @@ class OpenRouterClient:
             try:
                 with httpx.Client(timeout=self.timeout_seconds) as client:
                     response = client.post(self.endpoint, headers=headers, json=body)
-                if response.status_code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
-                    time.sleep(0.5 * (2**attempt))
-                    continue
+                if response.status_code in {429, 500, 502, 503, 504}:
+                    detail = response.text.strip().replace("\n", " ")[:1000]
+                    last_error = RuntimeError(
+                        f"OpenRouter HTTP {response.status_code}: "
+                        f"{detail or response.reason_phrase}"
+                    )
+                    if attempt < self.max_retries:
+                        time.sleep(
+                            _retry_delay(
+                                attempt,
+                                response.headers.get("Retry-After"),
+                            )
+                        )
+                        continue
+                    break
                 if response.is_error:
                     detail = response.text.strip().replace("\n", " ")[:1000]
                     raise RuntimeError(
@@ -163,8 +176,8 @@ class OpenRouterClient:
                         raise RuntimeError(
                             "Model returned incomplete or invalid JSON "
                             f"(finish_reason={finish_reason}, content_characters="
-                            f"{len(content)}). Increase the output-token budget or reduce "
-                            "WEB_DETECTION_MAX_EXPERT_TASKS."
+                            f"{len(content)}). Increase the output-token budget or use "
+                            "a model/provider with reliable structured output."
                         ) from error
                 elif isinstance(content, dict):
                     data = content
@@ -184,16 +197,16 @@ class OpenRouterClient:
                     latency_seconds=time.perf_counter() - start,
                 )
                 return LLMResponse(data=data, usage=usage, raw=raw)
-            except (
-                httpx.HTTPError,
-                json.JSONDecodeError,
-                KeyError,
-                TypeError,
-                RuntimeError,
-            ) as error:
+            except httpx.TransportError as error:
                 last_error = error
                 if attempt < self.max_retries:
-                    time.sleep(0.5 * (2**attempt))
+                    time.sleep(_retry_delay(attempt))
+                    continue
+                break
+            except (json.JSONDecodeError, KeyError, TypeError) as error:
+                raise RuntimeError(
+                    f"OpenRouter returned an invalid response: {error}"
+                ) from error
         raise RuntimeError(f"OpenRouter request failed: {last_error}")
 
 
@@ -210,3 +223,13 @@ def _decode_json_content(content: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise TypeError("The model response must be a JSON object")
     return payload
+
+
+def _retry_delay(attempt: int, retry_after: str | None = None) -> float:
+    jitter = random.uniform(0.0, 1.0)
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after)) + jitter
+        except ValueError:
+            pass
+    return 0.5 * (2**attempt) + jitter

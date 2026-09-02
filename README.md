@@ -149,9 +149,24 @@ Copy-Item .env.example .env
 ```dotenv
 WEB_PORT=8080
 ALLOWED_HOSTS=security.example.com
+
+# Candidate × Expert별 독립 요청의 동시 실행 상한(최대 100)
+WEB_MAX_CONCURRENT_EXPERT_REQUESTS=20
+
+# Expert 요청 한 건당 설정
+WEB_DETECTION_MAX_OUTPUT_TOKENS=8192
+REQUEST_TIMEOUT_SECONDS=90
+MAX_RETRIES=1
+OPENROUTER_ALLOW_FALLBACKS=true
 ```
 
 이 `.env`에도 OpenRouter API Key를 넣지 않습니다.
+
+웹 분석은 Candidate와 Expert 조합마다 OpenRouter 요청을 하나씩 만들고 제한된
+수만 병렬 실행합니다. 코드상 기본 상한은 100이지만 공유 provider의 429가 잦다면
+`WEB_MAX_CONCURRENT_EXPERT_REQUESTS`를 10~20부터 시작해 조정하십시오.
+`MAX_RETRIES=1`은 최초 요청을 포함한 총 1회가 아니라, 최초 요청 실패 후 일시적
+오류(429, 5xx, 네트워크 오류)에 한해 한 번 더 시도한다는 뜻입니다.
 
 인터넷에 공개할 때는 Caddy, Nginx 또는 클라우드 로드 밸런서에서 HTTPS를 적용한 뒤 8080 포트로 프록시해야 합니다. 사용자 API Key가 전송되므로 평문 HTTP 공개 배포는 사용하지 마십시오.
 

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from llm_security.config import AppConfig
-from llm_security.factory import build_batched_web_pipeline
+from llm_security.factory import build_parallel_web_pipeline
 from llm_security.models import ProjectCase, to_dict
 from llm_security.routing import BudgetedUtilityRouter
 
@@ -41,11 +41,10 @@ def analyze_source(
         split="unlabeled",
         metadata={"source": str(source_path)},
     )
-    result = build_batched_web_pipeline(
+    result = build_parallel_web_pipeline(
         config,
         router,
-        max_batch_characters=120_000,
-        max_batch_tasks=6,
+        max_concurrency=100,
     ).run(case)
     payload = to_dict(result)
     destination = Path(output).expanduser().resolve()
