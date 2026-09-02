@@ -8,16 +8,18 @@ import LoginPage from './pages/LoginPage'
 import NewAnalysisPage from './pages/NewAnalysisPage'
 import RegisterPage from './pages/RegisterPage'
 import SettingsPage from './pages/SettingsPage'
+import LandingPage from './pages/LandingPage'
 
 export default function App() {
   return (
     <Routes>
+      <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
 
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
-          <Route index element={<DashboardPage />} />
+          <Route path="/library" element={<DashboardPage />} />
           <Route path="/analyses" element={<HistoryPage />} />
           <Route path="/analyses/new" element={<NewAnalysisPage />} />
           <Route path="/analyses/:id" element={<AnalysisDetailPage />} />

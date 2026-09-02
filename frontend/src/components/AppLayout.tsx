@@ -1,6 +1,5 @@
 import {
   ChevronDown,
-  FolderKanban,
   LayoutDashboard,
   LogOut,
   ScanSearch,
@@ -30,9 +29,8 @@ export default function AppLayout() {
         </div>
 
         <nav className="nav-list" aria-label="Main navigation">
-          <NavLink to="/" end><LayoutDashboard size={16} /> Overview</NavLink>
+          <NavLink to="/library" end><LayoutDashboard size={16} /> Library</NavLink>
           <NavLink to="/analyses/new"><ScanSearch size={16} /> New Scan</NavLink>
-          <NavLink to="/analyses" end><FolderKanban size={16} /> Projects</NavLink>
           <NavLink to="/settings"><Settings size={16} /> Settings</NavLink>
         </nav>
 

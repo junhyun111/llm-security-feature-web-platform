@@ -12,7 +12,7 @@ export default function RegisterPage() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  if (user) return <Navigate to="/" replace />
+  if (user) return <Navigate to="/library" replace />
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -20,7 +20,7 @@ export default function RegisterPage() {
     setBusy(true)
     try {
       await register(email, password, displayName)
-      navigate('/')
+      navigate('/library')
     } catch (e) {
       setError(e instanceof Error ? e.message : '회원가입에 실패했습니다.')
     } finally {
