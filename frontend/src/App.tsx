@@ -7,6 +7,7 @@ import HistoryPage from './pages/HistoryPage'
 import LoginPage from './pages/LoginPage'
 import NewAnalysisPage from './pages/NewAnalysisPage'
 import RegisterPage from './pages/RegisterPage'
+import SettingsPage from './pages/SettingsPage'
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/analyses" element={<HistoryPage />} />
           <Route path="/analyses/new" element={<NewAnalysisPage />} />
           <Route path="/analyses/:id" element={<AnalysisDetailPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Route>
 

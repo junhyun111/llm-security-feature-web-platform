@@ -31,6 +31,8 @@ def build_openrouter_client(config: AppConfig) -> OpenRouterClient:
         reasoning_enabled=config.model.reasoning_enabled,
         reasoning_effort=config.model.reasoning_effort,
         provider=config.model.provider,
+        provider_sort=config.model.provider_sort,
+        provider_ignore=config.model.provider_ignore,
         require_parameters=config.model.require_parameters,
         allow_fallbacks=config.model.allow_fallbacks,
         structured_output=config.model.structured_output,

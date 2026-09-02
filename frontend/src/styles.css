@@ -20,6 +20,29 @@
   --success: #3fb950;
   --danger: #f85149;
   --warning: #d29922;
+  --sidebar: #010409;
+  --input-bg: #090e14;
+}
+
+:root[data-theme='light'] {
+  color: #1f2937;
+  background: #f6f8fb;
+  --bg: #f6f8fb;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --surface-3: #e4eaf2;
+  --border: #cbd5e1;
+  --border-soft: #dbe3ed;
+  --text: #172033;
+  --muted: #526174;
+  --muted-2: #748196;
+  --accent: #1769d1;
+  --accent-2: #287ee5;
+  --success: #15803d;
+  --danger: #d92d39;
+  --warning: #a16207;
+  --sidebar: #ffffff;
+  --input-bg: #ffffff;
 }
 
 * {
@@ -69,7 +92,7 @@ button {
   top: 0;
   height: 100vh;
   border-right: 1px solid var(--border-soft);
-  background: #010409;
+  background: var(--sidebar);
   padding: 24px 18px;
   display: flex;
   flex-direction: column;
@@ -141,7 +164,7 @@ button {
 }
 
 .nav-list a.active {
-  color: #f0f6fc;
+  color: var(--text);
   background: rgba(47, 129, 247, 0.12);
   box-shadow: inset 2px 0 0 #2f81f7;
 }
@@ -431,10 +454,38 @@ button {
   margin-top: 3px;
 }
 
+.table-actions {
+  width: 76px;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .table-arrow {
   color: var(--muted-2);
-  width: 30px;
+  vertical-align: middle;
 }
+
+.table-delete {
+  width: 29px;
+  height: 29px;
+  margin-right: 7px;
+  vertical-align: middle;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted-2);
+  background: transparent;
+  cursor: pointer;
+}
+
+.table-delete:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: rgba(248, 81, 73, .25);
+  background: rgba(248, 81, 73, .08);
+}
+
+.table-delete:disabled { cursor: not-allowed; opacity: .35; }
+
+.history-delete-progress { color: var(--muted); font-size: 11px; }
 
 .muted {
   color: var(--muted);
@@ -647,7 +698,7 @@ button {
   border-radius: 9px;
   border: 1px solid var(--border);
   color: var(--text);
-  background: #090e14;
+  background: var(--input-bg);
   padding: 0 12px;
   outline: 0;
 }
@@ -941,9 +992,25 @@ button {
   border-radius: 8px;
   outline: 0;
   color: var(--text);
-  background: #090e14;
+  background: var(--input-bg);
   padding: 0 11px;
   font-size: 10px;
+}
+
+:root[data-theme='light'] .auth-card {
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 24px 60px rgba(24, 39, 75, .12);
+}
+
+:root[data-theme='light'] .finding-card,
+:root[data-theme='light'] .analysis-empty-project,
+:root[data-theme='light'] .analysis-config-preview > div {
+  background: rgba(15, 23, 42, .025);
+}
+
+:root[data-theme='light'] .diff-view {
+  background: #f8fafc;
+  color: #26354a;
 }
 
 .patch-key-input:focus {

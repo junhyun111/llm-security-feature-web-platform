@@ -1,18 +1,17 @@
 import {
   Bot,
-  Eye,
-  EyeOff,
   FileWarning,
   FolderOpen,
-  KeyRound,
   ScanSearch,
+  Settings,
   ShieldCheck,
   SlidersHorizontal,
   UploadCloud
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
+import { useSettings } from '../settings/SettingsContext'
 import type { AnalysisJob } from '../types'
 import './NewAnalysisPage.css'
 
@@ -55,6 +54,7 @@ const EMPTY_EXCLUDED: ExcludedFiles = {
 
 export default function NewAnalysisPage() {
   const navigate = useNavigate()
+  const { openRouterApiKey: apiKey } = useSettings()
   const inputRef = useRef<HTMLInputElement>(null)
   const [files, setFiles] = useState<File[]>([])
   const [excluded, setExcluded] = useState<ExcludedFiles>(EMPTY_EXCLUDED)
@@ -62,8 +62,6 @@ export default function NewAnalysisPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [sensitivity, setSensitivity] = useState(0.5)
-  const [apiKey, setApiKey] = useState('')
-  const [showApiKey, setShowApiKey] = useState(false)
   const [modelId, setModelId] = useState(DEFAULT_RUNTIME_MODEL)
   const [trainedModels, setTrainedModels] = useState<string[]>([DEFAULT_RUNTIME_MODEL])
   const [catalogModels, setCatalogModels] = useState<OpenRouterModel[]>([])
@@ -209,7 +207,7 @@ export default function NewAnalysisPage() {
           <h1>프로젝트 분석</h1>
           <p>C/C++ 소스와 분석 민감도, OpenRouter 모델을 선택해 새 보안 검사를 시작합니다.</p>
         </div>
-        <div className="frontend-only-badge"><span className="status-dot" /> 사용자 설정 연결됨</div>
+        <Link className="frontend-only-badge" to="/settings"><span className="status-dot" /> {apiKey ? 'OpenRouter 설정 연결됨' : 'OpenRouter 설정 필요'}</Link>
       </header>
 
       <div className="analysis-create-grid">
@@ -278,14 +276,12 @@ export default function NewAnalysisPage() {
           </div>
 
           <div className="analysis-setting-block">
-            <label className="analysis-field-label" htmlFor="openrouter-key"><KeyRound size={15} /> OpenRouter API Key</label>
-            <div className="api-key-input-wrap">
-              <input id="openrouter-key" className="analysis-control" type={showApiKey ? 'text' : 'password'} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-or-v1-..." autoComplete="off" spellCheck={false} />
-              <button className="api-key-visibility" type="button" onClick={() => setShowApiKey((value) => !value)} aria-label={showApiKey ? 'API Key 숨기기' : 'API Key 보기'} title={showApiKey ? 'API Key 숨기기' : 'API Key 보기'}>
-                {showApiKey ? <EyeOff size={17} /> : <Eye size={17} />}
-              </button>
+            <label className="analysis-field-label"><Settings size={15} /> OpenRouter API Key</label>
+            <div className={`analysis-key-status ${apiKey ? 'configured' : ''}`}>
+              <span>{apiKey ? '설정 탭의 API Key가 연결되었습니다.' : '설정 탭에서 API Key를 먼저 저장해주세요.'}</span>
+              <Link to="/settings">설정 열기</Link>
             </div>
-            <p className="analysis-field-help">키는 HTTPS 백엔드를 거쳐 이번 Runtime 작업에만 전달되며 데이터베이스와 프로젝트 파일에 저장되지 않습니다.</p>
+            <p className="analysis-field-help">키는 서버와 분석 결과에 저장되지 않으며, 현재 브라우저의 설정에서만 관리합니다.</p>
             <div className="model-catalog-actions">
               <button className="secondary-button compact" type="button" disabled={catalogBusy || !apiKey.trim()} onClick={loadModelCatalog}>
                 <Bot size={15} /> {catalogBusy ? '불러오는 중…' : 'OpenRouter 모델 목록 불러오기'}
@@ -297,12 +293,12 @@ export default function NewAnalysisPage() {
           <div className="analysis-config-preview">
             <div><span>민감도</span><strong>{sensitivity.toFixed(2)}</strong></div>
             <div><span>모델</span><strong title={modelId}>{modelId || '미입력'}</strong></div>
-            <div><span>사용자 Key</span><strong>{apiKey ? '입력됨' : '미입력'}</strong></div>
+            <div><span>사용자 Key</span><strong>{apiKey ? '설정됨' : '미설정'}</strong></div>
           </div>
 
           <div className="analysis-ui-notice">
             <ShieldCheck size={17} />
-            <p><strong>요청 단위 보안</strong> 모델과 API Key는 분석 요청에만 사용됩니다. 완료 후 Runtime 메모리에서도 제거됩니다.</p>
+            <p><strong>요청 단위 보안</strong> API Key는 설정한 브라우저에서 분석 요청에만 사용됩니다. 완료 후 Runtime 메모리에서도 제거됩니다.</p>
           </div>
         </section>
       </div>

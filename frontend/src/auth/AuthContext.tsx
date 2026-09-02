@@ -14,6 +14,8 @@ type AuthContextValue = {
   loading: boolean
   login: (email: string, password: string) => Promise<void>
   register: (email: string, password: string, displayName: string) => Promise<void>
+  updateProfile: (email: string, displayName: string) => Promise<void>
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>
   logout: () => Promise<void>
 }
 
@@ -51,6 +53,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           displayName
         })
         setUser(result)
+      },
+      updateProfile: async (email, displayName) => {
+        const result = await api.put<User>('/api/auth/profile', { email, displayName })
+        setUser(result)
+      },
+      changePassword: async (currentPassword, newPassword) => {
+        await api.post<void>('/api/auth/password', { currentPassword, newPassword })
       },
       logout: async () => {
         await api.post<void>('/api/auth/logout')

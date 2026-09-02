@@ -90,6 +90,16 @@ public class PythonAnalyzerClient
             cancellationToken: cancellationToken))!;
     }
 
+    public async Task DeleteJobAsync(
+        string analyzerJobId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.DeleteAsync(
+            $"/api/jobs/{Uri.EscapeDataString(analyzerJobId)}",
+            cancellationToken);
+        await EnsureSuccess(response, cancellationToken);
+    }
+
     public async Task<string> GetAnalysisJsonAsync(
         string analyzerJobId,
         CancellationToken cancellationToken = default)

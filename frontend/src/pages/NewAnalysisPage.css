@@ -217,12 +217,33 @@
   border-radius: 9px;
   outline: 0;
   color: var(--text);
-  background: #090e14;
+  background: var(--input-bg);
   padding: 0 12px;
   font: inherit;
   font-size: 11px;
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
+
+.analysis-key-status {
+  min-height: 43px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--muted);
+  background: var(--input-bg);
+  font-size: 10px;
+}
+
+.analysis-key-status.configured {
+  color: var(--success);
+  border-color: rgba(63, 185, 80, .32);
+}
+
+.analysis-key-status a { color: var(--accent); font-weight: 700; white-space: nowrap; }
 
 select.analysis-control {
   cursor: pointer;

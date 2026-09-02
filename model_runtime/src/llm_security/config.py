@@ -21,6 +21,8 @@ class ModelConfig:
     reasoning_enabled: bool | None = None
     reasoning_effort: str | None = "medium"
     provider: str | None = None
+    provider_sort: str | None = "throughput"
+    provider_ignore: tuple[str, ...] = ("baidu",)
     require_parameters: bool = True
     allow_fallbacks: bool = True
     structured_output: bool = True
@@ -91,6 +93,11 @@ class AppConfig:
             for item in values.get("OPENROUTER_SWEEP_MODELS", "").split(",")
             if item.strip()
         )
+        provider_ignore = tuple(
+            item.strip().lower()
+            for item in values.get("OPENROUTER_PROVIDER_IGNORE", "baidu").split(",")
+            if item.strip()
+        )
         default_expert_model = (
             _optional(values.get("OPENROUTER_EXPERT_MODEL"))
             or "request/model-required"
@@ -125,6 +132,10 @@ class AppConfig:
                     values.get("OPENROUTER_REASONING_EFFORT", "medium")
                 ),
                 provider=_optional(values.get("OPENROUTER_PROVIDER")),
+                provider_sort=_optional(
+                    values.get("OPENROUTER_PROVIDER_SORT", "throughput")
+                ),
+                provider_ignore=provider_ignore,
                 require_parameters=_as_bool(
                     values.get("OPENROUTER_REQUIRE_PARAMETERS", "true")
                 ),
@@ -228,6 +239,11 @@ class AppConfig:
             raise ValueError("REQUEST_TIMEOUT_SECONDS must be positive")
         if self.runtime.max_retries < 0:
             raise ValueError("MAX_RETRIES cannot be negative")
+        if any(
+            not provider or any(character.isspace() for character in provider)
+            for provider in self.model.provider_ignore
+        ):
+            raise ValueError("OPENROUTER_PROVIDER_IGNORE contains an invalid provider")
         if any(
             not 0.0 <= value <= 1.0
             for value in self.validation.minimum_confidence_by_expert.values()

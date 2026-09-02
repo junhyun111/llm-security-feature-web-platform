@@ -93,6 +93,11 @@ class RequestAwareWebJobService(WebJobService):
         with self._request_options_lock:
             return self._request_options.get(job_id, RuntimeJobOptions())
 
+    def delete_job(self, job_id: str) -> None:
+        super().delete_job(job_id)
+        with self._request_options_lock:
+            self._request_options.pop(job_id, None)
+
     def _config_for_options(self, options: RuntimeJobOptions) -> AppConfig:
         config = AppConfig.from_env(self.settings.env_file)
         if not options.api_key:

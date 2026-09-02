@@ -80,7 +80,7 @@ class WebSettings:
     worker_count: int = 1
     candidate_gate_enabled: bool = True
     max_concurrent_expert_requests: int = 100
-    detection_max_output_tokens: int = 8_192
+    detection_max_output_tokens: int = 16_384
     patch_max_prompt_characters: int = 120_000
     env_file: Path = Path(".env")
 
@@ -121,7 +121,7 @@ class WebSettings:
                 ),
             ),
             detection_max_output_tokens=int(
-                values.get("WEB_DETECTION_MAX_OUTPUT_TOKENS", "8192")
+                values.get("WEB_DETECTION_MAX_OUTPUT_TOKENS", "16384")
             ),
             patch_max_prompt_characters=int(
                 values.get("WEB_PATCH_MAX_PROMPT_CHARACTERS", "120000")
@@ -272,6 +272,20 @@ class WebJobService:
             if not path.exists():
                 raise KeyError(job_id)
             return _job_from_raw(json.loads(path.read_text(encoding="utf-8")))
+
+    def delete_job(self, job_id: str) -> None:
+        """Remove a completed job and every runtime-owned file beneath it."""
+
+        with self._lock:
+            record = self.get_job(job_id)
+            if record.status in {
+                JobStatus.UPLOADING,
+                JobStatus.QUEUED,
+                JobStatus.ANALYZING,
+            }:
+                raise RuntimeError("An active analysis cannot be deleted")
+            job_directory = self._job_dir(job_id)
+            shutil.rmtree(job_directory)
 
     def get_analysis(self, job_id: str) -> dict:
         record = self.get_job(job_id)

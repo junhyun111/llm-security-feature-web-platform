@@ -42,6 +42,8 @@ class OpenRouterClient:
         reasoning_enabled: bool | None = None,
         reasoning_effort: str | None = None,
         provider: str | None = None,
+        provider_sort: str | None = "throughput",
+        provider_ignore: tuple[str, ...] = ("baidu",),
         require_parameters: bool = True,
         allow_fallbacks: bool = True,
         structured_output: bool = True,
@@ -56,6 +58,12 @@ class OpenRouterClient:
         self.reasoning_enabled = reasoning_enabled
         self.reasoning_effort = reasoning_effort
         self.provider = provider
+        self.provider_sort = provider_sort
+        self.provider_ignore = tuple(
+            item.strip().lower()
+            for item in provider_ignore
+            if item.strip()
+        )
         self.require_parameters = require_parameters
         self.allow_fallbacks = allow_fallbacks
         self.structured_output = structured_output
@@ -80,14 +88,22 @@ class OpenRouterClient:
                 "Do not use Markdown fences:\n"
                 + json.dumps(schema, ensure_ascii=False)
             )
+        provider_config: dict[str, Any] = {
+            "require_parameters": self.require_parameters,
+            "allow_fallbacks": self.allow_fallbacks,
+        }
+        if self.provider_sort:
+            provider_config["sort"] = self.provider_sort
+        if self.provider_ignore:
+            provider_config["ignore"] = list(self.provider_ignore)
+        if self.provider:
+            provider_config["order"] = [self.provider]
+
         body: dict[str, Any] = {
             "model": model,
             "messages": request_messages,
             "max_tokens": self.max_output_tokens,
-            "provider": {
-                "require_parameters": self.require_parameters,
-                "allow_fallbacks": self.allow_fallbacks,
-            },
+            "provider": provider_config,
         }
         if self.temperature is not None:
             body["temperature"] = self.temperature
@@ -96,11 +112,11 @@ class OpenRouterClient:
                 "type": "json_schema",
                 "json_schema": response_schema,
             }
-        if self.provider:
-            body["provider"]["order"] = [self.provider]
-        if self.reasoning_enabled is not None:
-            body["reasoning"] = {"enabled": self.reasoning_enabled, "exclude": True}
-            if self.reasoning_enabled and self.reasoning_effort:
+        if self.reasoning_enabled is False:
+            body["reasoning"] = {"effort": "none", "exclude": True}
+        elif self.reasoning_enabled is True:
+            body["reasoning"] = {"enabled": True, "exclude": True}
+            if self.reasoning_effort:
                 body["reasoning"]["effort"] = self.reasoning_effort
         elif self.reasoning_effort:
             body["reasoning"] = {"effort": self.reasoning_effort, "exclude": True}

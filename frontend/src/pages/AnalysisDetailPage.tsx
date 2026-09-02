@@ -14,6 +14,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api'
 import StatusBadge from '../components/StatusBadge'
+import { useSettings } from '../settings/SettingsContext'
 import type { AnalysisDetail, FindingBundle, PatchBatch } from '../types'
 import './AnalysisDetailPage.css'
 
@@ -37,13 +38,13 @@ const AnalysisTracePanel = lazy(() =>
 
 export default function AnalysisDetailPage() {
   const { id } = useParams()
+  const { openRouterApiKey } = useSettings()
   const [detail, setDetail] = useState<AnalysisDetail | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [activeFindingId, setActiveFindingId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<DetailTab>('code')
   const [error, setError] = useState('')
   const [patchBusy, setPatchBusy] = useState(false)
-  const [patchApiKey, setPatchApiKey] = useState('')
 
   const load = useCallback(async () => {
     if (!id) return
@@ -92,8 +93,8 @@ export default function AnalysisDetailPage() {
 
   const proposePatch = async () => {
     if (!id || !selected.size) return
-    if (!patchApiKey.trim()) {
-      setError('패치 생성에 사용할 OpenRouter API Key를 입력해 주세요.')
+    if (!openRouterApiKey.trim()) {
+      setError('설정 탭에서 패치 생성에 사용할 OpenRouter API Key를 저장해 주세요.')
       return
     }
     setPatchBusy(true)
@@ -101,9 +102,8 @@ export default function AnalysisDetailPage() {
     try {
       await api.post<PatchBatch>(`/api/analyses/${id}/patches/proposal`, {
         findingIds: Array.from(selected),
-        apiKey: patchApiKey.trim()
+        apiKey: openRouterApiKey.trim()
       })
-      setPatchApiKey('')
       await load()
       setActiveTab('patch')
     } catch (reason) {
@@ -143,26 +143,16 @@ export default function AnalysisDetailPage() {
   const patch = analysis?.patch_batch
   const patchComposer = !patch ? (
     <div className="patch-generation-actions">
-      <input
-        className="patch-key-input"
-        type="password"
-        value={patchApiKey}
-        onChange={(event) => setPatchApiKey(event.target.value)}
-        placeholder="OpenRouter API Key 재입력"
-        autoComplete="off"
-        spellCheck={false}
-        aria-label="패치 생성용 OpenRouter API Key"
-      />
       <button
         className="primary-button compact"
-        disabled={!selected.size || !patchApiKey.trim() || patchBusy}
+        disabled={!selected.size || !openRouterApiKey.trim() || patchBusy}
         onClick={proposePatch}
       >
         <WandSparkles size={15} />
         {patchBusy ? '생성 중…' : `통합 패치 생성 (${selected.size})`}
       </button>
       <p className="patch-composer-help">
-        검증된 항목만 선택할 수 있습니다. 키는 이 요청에만 사용되며 저장되지 않습니다.
+        검증된 항목만 선택할 수 있습니다. <Link to="/settings">설정 탭의 API Key</Link>를 이 요청에만 사용합니다.
       </p>
     </div>
   ) : null

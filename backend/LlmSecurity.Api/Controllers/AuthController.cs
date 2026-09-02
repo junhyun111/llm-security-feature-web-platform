@@ -101,4 +101,60 @@ public class AuthController : ControllerBase
             user.Email ?? "",
             user.DisplayName));
     }
+
+    [Authorize]
+    [HttpPut("profile")]
+    public async Task<IActionResult> UpdateProfile(UpdateProfileRequest request)
+    {
+        var user = await _userManager.GetUserAsync(User);
+        if (user is null)
+            return Unauthorized();
+
+        var email = request.Email.Trim().ToLowerInvariant();
+        var displayName = request.DisplayName.Trim();
+        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(displayName))
+            return BadRequest(new { message = "로그인 이메일(ID)과 표시 이름을 입력해주세요." });
+
+        user.Email = email;
+        user.NormalizedEmail = _userManager.NormalizeEmail(email);
+        user.UserName = email;
+        user.NormalizedUserName = _userManager.NormalizeName(email);
+        user.DisplayName = displayName;
+        var result = await _userManager.UpdateAsync(user);
+        if (!result.Succeeded)
+        {
+            return BadRequest(new
+            {
+                message = "계정 정보를 저장하지 못했습니다.",
+                errors = result.Errors.Select(x => x.Description)
+            });
+        }
+
+        return Ok(new UserResponse(user.Id, user.Email ?? "", user.DisplayName));
+    }
+
+    [Authorize]
+    [HttpPost("password")]
+    public async Task<IActionResult> ChangePassword(ChangePasswordRequest request)
+    {
+        var user = await _userManager.GetUserAsync(User);
+        if (user is null)
+            return Unauthorized();
+
+        var result = await _userManager.ChangePasswordAsync(
+            user,
+            request.CurrentPassword,
+            request.NewPassword);
+        if (!result.Succeeded)
+        {
+            return BadRequest(new
+            {
+                message = "비밀번호를 변경하지 못했습니다.",
+                errors = result.Errors.Select(x => x.Description)
+            });
+        }
+
+        await _signInManager.RefreshSignInAsync(user);
+        return NoContent();
+    }
 }

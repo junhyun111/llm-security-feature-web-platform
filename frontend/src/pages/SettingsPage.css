@@ -1,0 +1,20 @@
+.settings-page { width: min(920px, calc(100% - 64px)); }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.settings-card { display: grid; align-content: start; gap: 14px; }
+.settings-card-wide { grid-column: 1 / -1; }
+.settings-card-title { display: flex; gap: 10px; align-items: flex-start; padding-bottom: 15px; border-bottom: 1px solid var(--border-soft); color: var(--accent); }
+.settings-card-title h2 { margin: 0 0 4px; color: var(--text); font-size: 15px; }
+.settings-card-title p, .settings-help { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.settings-label { display: grid; gap: 7px; color: var(--muted); font-size: 11px; }
+.settings-label input, .settings-key-row input { min-height: 42px; width: 100%; padding: 0 11px; border: 1px solid var(--border); border-radius: 8px; outline: 0; color: var(--text); background: var(--input-bg); }
+.settings-label input:focus, .settings-key-row input:focus { border-color: rgba(47, 129, 247, .62); box-shadow: 0 0 0 3px rgba(47, 129, 247, .08); }
+.theme-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.theme-choice button { min-height: 74px; display: grid; place-items: center; gap: 8px; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; cursor: pointer; font-size: 11px; }
+.theme-choice button.selected { color: var(--accent); border-color: rgba(47, 129, 247, .65); background: rgba(47, 129, 247, .09); }
+.settings-key-row { position: relative; }
+.settings-key-row input { padding-right: 46px; }
+.icon-button { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); width: 32px; height: 32px; display: grid; place-items: center; color: var(--muted); background: transparent; border-radius: 6px; cursor: pointer; }
+.icon-button:hover { color: var(--text); background: var(--surface-2); }
+.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.settings-notice { margin: -14px 0 18px; padding: 11px 13px; color: var(--success); background: rgba(63, 185, 80, .08); border: 1px solid rgba(63, 185, 80, .22); border-radius: 9px; font-size: 11px; }
+@media (max-width: 700px) { .settings-grid { grid-template-columns: 1fr; } .settings-card-wide { grid-column: auto; } .settings-page { width: min(100% - 30px, 920px); } }

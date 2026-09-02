@@ -6,6 +6,8 @@ import type { AnalysisJob } from '../types'
 export default function HistoryPage() {
   const [jobs, setJobs] = useState<AnalysisJob[]>([])
   const [loading, setLoading] = useState(true)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     api
@@ -13,6 +15,20 @@ export default function HistoryPage() {
       .then(setJobs)
       .finally(() => setLoading(false))
   }, [])
+
+  const deleteJob = async (job: AnalysisJob) => {
+    if (!window.confirm(`“${job.projectName}” 분석 이력과 업로드된 프로젝트 파일을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) return
+    setDeletingId(job.id)
+    setError('')
+    try {
+      await api.delete<void>(`/api/analyses/${job.id}`)
+      setJobs((current) => current.filter((item) => item.id !== job.id))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '분석 이력을 삭제하지 못했습니다.')
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   return (
     <div className="page">
@@ -25,7 +41,9 @@ export default function HistoryPage() {
       </header>
 
       <section className="panel">
-        {loading ? <div className="skeleton-line" /> : <JobTable jobs={jobs} />}
+        {error && <div className="error-box">{error}</div>}
+        {deletingId && <p className="history-delete-progress">분석 이력과 프로젝트 파일을 삭제하고 있습니다…</p>}
+        {loading ? <div className="skeleton-line" /> : <JobTable jobs={jobs} onDelete={deleteJob} />}
       </section>
     </div>
   )

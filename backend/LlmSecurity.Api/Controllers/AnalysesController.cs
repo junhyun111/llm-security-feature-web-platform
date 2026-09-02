@@ -149,6 +149,47 @@ public class AnalysesController : ControllerBase
         return Ok(new AnalysisDetailResponse(ToResponse(job), analysis));
     }
 
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var job = await GetOwnedJob(id, cancellationToken);
+        if (job is null)
+            return NotFound();
+
+        if (job.Status is "uploading" or "queued" or "analyzing")
+        {
+            return Conflict(new
+            {
+                message = "진행 중인 분석은 완료 또는 실패 후 삭제할 수 있습니다."
+            });
+        }
+
+        try
+        {
+            await _analyzer.DeleteJobAsync(job.AnalyzerJobId, cancellationToken);
+        }
+        catch (AnalyzerApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            // Runtime 파일이 이미 정리된 경우에도 사용자 이력은 삭제한다.
+        }
+        catch (AnalyzerApiException ex)
+        {
+            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+        }
+        catch (HttpRequestException)
+        {
+            return StatusCode(
+                StatusCodes.Status503ServiceUnavailable,
+                new { message = "Python 분석 서버에 연결할 수 없어 이력을 안전하게 삭제하지 못했습니다." });
+        }
+
+        _db.AnalysisJobs.Remove(job);
+        await _db.SaveChangesAsync(cancellationToken);
+        return NoContent();
+    }
+
     [HttpPost("{id:guid}/patches/proposal")]
     public async Task<IActionResult> ProposePatch(
         Guid id,

@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   LogOut,
   ScanSearch,
+  Settings,
   ShieldCheck
 } from 'lucide-react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
@@ -29,7 +30,8 @@ export default function AppLayout() {
           <span className="nav-section-label">Workspace</span>
           <NavLink to="/" end><LayoutDashboard size={17} /> Overview</NavLink>
           <NavLink to="/analyses/new"><ScanSearch size={17} /> New Scan</NavLink>
-          <NavLink to="/analyses"><FolderKanban size={17} /> Projects</NavLink>
+          <NavLink to="/analyses" end><FolderKanban size={17} /> Projects</NavLink>
+          <NavLink to="/settings"><Settings size={17} /> Settings</NavLink>
         </nav>
 
         <div className="sidebar-bottom">

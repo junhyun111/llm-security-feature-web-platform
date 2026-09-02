@@ -35,6 +35,7 @@ class FakeHttpClient:
     def __init__(self, responses: list[FakeResponse | Exception]) -> None:
         self.responses = responses
         self.call_count = 0
+        self.calls: list[dict] = []
 
     def __enter__(self) -> FakeHttpClient:
         return self
@@ -43,6 +44,7 @@ class FakeHttpClient:
         return None
 
     def post(self, *args, **kwargs) -> FakeResponse:
+        self.calls.append(kwargs)
         response = self.responses[self.call_count]
         self.call_count += 1
         if isinstance(response, Exception):
@@ -148,6 +150,31 @@ class OpenRouterRetryTest(unittest.TestCase):
         self.assertEqual({"findings": []}, response.data)
         self.assertEqual(2, transport.call_count)
         sleep.assert_called_once_with(0.5)
+
+    def test_provider_routing_excludes_baidu_and_disables_reasoning(self) -> None:
+        transport = FakeHttpClient([success_response()])
+        client = OpenRouterClient(
+            api_key="test-key",
+            max_retries=1,
+            timeout_seconds=90,
+            reasoning_enabled=False,
+            provider_sort="throughput",
+            provider_ignore=("baidu", "example-provider"),
+        )
+
+        with patch("llm_security.llm.httpx.Client", return_value=transport):
+            self.complete(client)
+
+        body = transport.calls[0]["json"]
+        self.assertEqual("throughput", body["provider"]["sort"])
+        self.assertEqual(
+            ["baidu", "example-provider"],
+            body["provider"]["ignore"],
+        )
+        self.assertEqual(
+            {"effort": "none", "exclude": True},
+            body["reasoning"],
+        )
 
 
 if __name__ == "__main__":

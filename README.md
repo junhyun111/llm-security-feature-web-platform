@@ -91,8 +91,8 @@ Browser
 OpenRouter API Key와 모델명은 `.env`에 저장하지 않습니다.
 
 1. 회원가입 또는 로그인합니다.
-2. `새 분석` 화면에 본인의 OpenRouter API Key를 입력합니다.
-3. `OpenRouter 모델 목록 불러오기`를 누르거나 모델 ID를 직접 입력합니다.
+2. `Settings` 화면에서 본인의 OpenRouter API Key를 저장합니다.
+3. `새 분석` 화면에서 `OpenRouter 모델 목록 불러오기`를 누르거나 모델 ID를 직접 입력합니다.
 4. 프로젝트 폴더와 민감도를 선택하고 분석을 시작합니다.
 
 API Key는 브라우저에서 ASP.NET을 거쳐 내부 Runtime으로 전달되며 다음 위치에 저장되지 않습니다.
@@ -102,7 +102,7 @@ API Key는 브라우저에서 ASP.NET을 거쳐 내부 Runtime으로 전달되�
 - 업로드 프로젝트
 - 서버 `.env`
 
-분석 종료 후 Runtime 메모리에서도 제거됩니다. 통합 패치를 생성할 때는 API Key를 다시 입력해야 합니다.
+설정 화면의 키는 **현재 브라우저의 로그인 계정별 로컬 저장소**에만 보관됩니다. 분석 종료 후 Runtime 메모리에서도 제거되며, 서버/DB/분석 파일에는 남지 않습니다. 공용 PC에서는 설정 화면의 `저장된 키 삭제`를 사용하세요.
 
 현재 Router가 학습된 권장 모델은 Runtime artifact 메타데이터에서 자동으로 표시합니다. 다른 OpenRouter 텍스트 모델도 실행할 수 있지만 UI에 `Router 성능 미검증`으로 표시됩니다.
 
@@ -154,10 +154,12 @@ ALLOWED_HOSTS=security.example.com
 WEB_MAX_CONCURRENT_EXPERT_REQUESTS=20
 
 # Expert 요청 한 건당 설정
-WEB_DETECTION_MAX_OUTPUT_TOKENS=8192
+WEB_DETECTION_MAX_OUTPUT_TOKENS=16384
 REQUEST_TIMEOUT_SECONDS=90
 MAX_RETRIES=1
 OPENROUTER_ALLOW_FALLBACKS=true
+OPENROUTER_PROVIDER_SORT=throughput
+OPENROUTER_PROVIDER_IGNORE=baidu
 ```
 
 이 `.env`에도 OpenRouter API Key를 넣지 않습니다.
