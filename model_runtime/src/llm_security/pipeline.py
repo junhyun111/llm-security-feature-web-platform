@@ -94,5 +94,10 @@ class VulnerabilityPipeline:
             errors=expert_output.errors,
             expert_task_count=expert_output.task_count,
             submitted_expert_task_count=expert_output.submitted_task_count,
+            completed_expert_task_count=getattr(
+                expert_output,
+                "completed_task_count",
+                expert_output.submitted_task_count,
+            ),
             skipped_expert_task_count=expert_output.skipped_task_count,
         )

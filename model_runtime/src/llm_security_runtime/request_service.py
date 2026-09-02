@@ -164,7 +164,7 @@ class RequestAwareWebJobService(WebJobService):
             metadata={"source": "web-upload"},
         )
 
-        progress(40, "Running semantic analysis and one batched multi-Expert call")
+        progress(40, "Running semantic analysis in bounded multi-Expert batches")
         result = build_batched_web_pipeline(
             config,
             router,
@@ -215,12 +215,15 @@ class RequestAwareWebJobService(WebJobService):
                 "request_count": len(result.usage),
                 "expert_task_count": result.expert_task_count,
                 "submitted_expert_task_count": result.submitted_expert_task_count,
+                "completed_expert_task_count": result.completed_expert_task_count,
                 "skipped_expert_task_count": result.skipped_expert_task_count,
                 "structural_rejected_count": sum(
                     item.verdict == ValidationVerdict.REJECTED
                     for item in result.structural_validations
                 ),
-                "detection_call_limit": 1,
+                "detection_max_tasks_per_request": (
+                    self.settings.detection_max_expert_tasks
+                ),
                 "request_settings": {
                     **options.safe_metadata(),
                     "effective_model": config.model.expert_model,

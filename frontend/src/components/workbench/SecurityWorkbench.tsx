@@ -638,7 +638,7 @@ export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) 
         </div>
         <div className="trace-summary">
           <span>Candidates <strong>{analysis.summary.candidate_count}</strong></span>
-          <span>Expert tasks <strong>{analysis.summary.submitted_expert_task_count}</strong></span>
+          <span>Expert tasks <strong>{analysis.summary.completed_expert_task_count ?? analysis.summary.submitted_expert_task_count}/{analysis.summary.expert_task_count ?? analysis.summary.submitted_expert_task_count}</strong></span>
           <span>Requests <strong>{analysis.summary.request_count}</strong></span>
           <span>Errors <strong>{analysis.errors?.length || 0}</strong></span>
         </div>

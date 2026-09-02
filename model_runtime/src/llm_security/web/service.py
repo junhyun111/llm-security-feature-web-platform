@@ -64,6 +64,7 @@ class JobStatus(str, Enum):
     QUEUED = "queued"
     ANALYZING = "analyzing"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     FAILED = "failed"
 
 
@@ -78,8 +79,12 @@ class WebSettings:
     worker_count: int = 1
     candidate_gate_enabled: bool = True
     detection_max_prompt_characters: int = 120_000
-    detection_max_expert_tasks: int = 24
-    detection_max_output_tokens: int = 8_192
+    # Keep each structured-output request small enough for models to finish
+    # the complete JSON response. All tasks are split across as many bounded
+    # requests as needed. Per-request limits can be overridden through
+    # WEB_DETECTION_MAX_EXPERT_TASKS/WEB_DETECTION_MAX_OUTPUT_TOKENS.
+    detection_max_expert_tasks: int = 6
+    detection_max_output_tokens: int = 16_384
     patch_max_prompt_characters: int = 120_000
     env_file: Path = Path(".env")
 
@@ -111,10 +116,10 @@ class WebSettings:
                 values.get("WEB_DETECTION_MAX_PROMPT_CHARACTERS", "120000")
             ),
             detection_max_expert_tasks=int(
-                values.get("WEB_DETECTION_MAX_EXPERT_TASKS", "24")
+                values.get("WEB_DETECTION_MAX_EXPERT_TASKS", "6")
             ),
             detection_max_output_tokens=int(
-                values.get("WEB_DETECTION_MAX_OUTPUT_TOKENS", "8192")
+                values.get("WEB_DETECTION_MAX_OUTPUT_TOKENS", "16384")
             ),
             patch_max_prompt_characters=int(
                 values.get("WEB_PATCH_MAX_PROMPT_CHARACTERS", "120000")
@@ -268,7 +273,7 @@ class WebJobService:
 
     def get_analysis(self, job_id: str) -> dict:
         record = self.get_job(job_id)
-        if record.status != JobStatus.COMPLETED:
+        if record.status not in {JobStatus.COMPLETED, JobStatus.PARTIAL}:
             raise RuntimeError("Analysis is not complete")
         path = self._job_dir(job_id) / "analysis.json"
         if not path.exists():
@@ -708,12 +713,15 @@ class WebJobService:
                 summary.get("validated_finding_count", 0)
             )
             completed.total_cost = float(summary.get("total_cost", 0.0))
+            outcome_status, outcome_message, outcome_error = _analysis_outcome(
+                analysis
+            )
             self._update_job(
                 completed,
-                status=JobStatus.COMPLETED,
+                status=outcome_status,
                 progress=100,
-                message="Analysis complete",
-                error=None,
+                message=outcome_message,
+                error=outcome_error,
             )
         except Exception as error:  # background boundary must persist the failure
             try:
@@ -742,7 +750,8 @@ class WebJobService:
         config.analysis.backend = "semantic"
         config.candidate_gate.enabled = self.settings.candidate_gate_enabled
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
-        # One logical detection call must also mean one physical HTTP attempt.
+        # A malformed provider response is not retried automatically. Distinct
+        # bounded Expert batches are still sent as separate requests.
         config.runtime.max_retries = 0
         progress(20, "Loading C/C++ source files")
         source_files = load_project_sources(
@@ -759,7 +768,7 @@ class WebJobService:
             split="unlabeled",
             metadata={"source": "web-upload"},
         )
-        progress(40, "Running semantic analysis and one batched multi-Expert call")
+        progress(40, "Running semantic analysis in bounded multi-Expert batches")
         result = build_batched_web_pipeline(
             config,
             router,
@@ -806,12 +815,15 @@ class WebJobService:
                 "request_count": len(result.usage),
                 "expert_task_count": result.expert_task_count,
                 "submitted_expert_task_count": result.submitted_expert_task_count,
+                "completed_expert_task_count": result.completed_expert_task_count,
                 "skipped_expert_task_count": result.skipped_expert_task_count,
                 "structural_rejected_count": sum(
                     item.verdict == ValidationVerdict.REJECTED
                     for item in result.structural_validations
                 ),
-                "detection_call_limit": 1,
+                "detection_max_tasks_per_request": (
+                    self.settings.detection_max_expert_tasks
+                ),
             },
             "findings": bundles,
             "routes": [to_dict(item) for item in result.routes],
@@ -932,6 +944,57 @@ def load_router_artifact(path: str | Path):
         except TypeError as error:
             errors.append(str(error))
     raise TypeError("Unsupported Router artifact: " + " | ".join(errors))
+
+
+def _analysis_outcome(
+    analysis: dict,
+) -> tuple[JobStatus, str, str | None]:
+    summary = analysis.get("summary", {})
+    if not isinstance(summary, dict):
+        summary = {}
+
+    submitted = max(
+        0,
+        int(summary.get("submitted_expert_task_count", 0) or 0),
+    )
+    task_count = max(
+        submitted,
+        int(summary.get("expert_task_count", submitted) or 0),
+    )
+    completed = max(
+        0,
+        int(summary.get("completed_expert_task_count", submitted) or 0),
+    )
+    skipped = max(
+        0,
+        int(summary.get("skipped_expert_task_count", 0) or 0),
+    )
+    raw_errors = analysis.get("errors", [])
+    errors = (
+        [str(item) for item in raw_errors if str(item).strip()]
+        if isinstance(raw_errors, list)
+        else [str(raw_errors)]
+    )
+
+    if task_count > 0 and completed == 0:
+        detail = (
+            "Expert 응답을 어떤 작업에도 정상 귀속하지 못했습니다 "
+            f"(완료 0/{task_count}, 제출 {submitted}, 건너뜀 {skipped})."
+        )
+        if errors:
+            detail += " " + " | ".join(errors[:2])
+        return JobStatus.FAILED, "Analysis failed", detail
+
+    if completed < task_count or skipped > 0 or errors:
+        detail = (
+            "일부 Expert 작업만 정상 처리되었습니다 "
+            f"(완료 {completed}/{task_count}, 제출 {submitted}, 건너뜀 {skipped})."
+        )
+        if errors:
+            detail += " " + " | ".join(errors[:2])
+        return JobStatus.PARTIAL, "Analysis completed with warnings", detail
+
+    return JobStatus.COMPLETED, "Analysis complete", None
 
 
 def _file_sha256(path: str | Path) -> str:

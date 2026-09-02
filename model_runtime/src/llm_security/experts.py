@@ -29,6 +29,7 @@ class ExpertRunOutput:
     errors: list[str]
     task_count: int = 0
     submitted_task_count: int = 0
+    completed_task_count: int = 0
     skipped_task_count: int = 0
 
 
@@ -57,6 +58,7 @@ class ExpertRunner:
         usage: list[UsageRecord] = []
         errors: list[str] = []
         task_count = 0
+        completed_task_count = 0
         for route in routes:
             candidate = by_id[route.candidate_id]
             assignments = route.assignments or [
@@ -98,6 +100,7 @@ class ExpertRunner:
                                 prompt_version=self.prompt_version,
                             )
                         )
+                    completed_task_count += 1
                 except (KeyError, TypeError, ValueError, RuntimeError) as error:
                     errors.append(
                         f"{candidate.candidate_id}/{expert.value}/"
@@ -109,18 +112,27 @@ class ExpertRunner:
             errors=errors,
             task_count=task_count,
             submitted_task_count=task_count,
+            completed_task_count=completed_task_count,
         )
 
 
-class BatchedExpertRunner:
-    """Execute all Router-selected logical Experts in one LLM completion.
+@dataclass(slots=True)
+class _BatchedTask:
+    task_id: str
+    candidate: Candidate
+    expert: ExpertFamily
+    context: Any
 
-    Expert identities, prompts, evidence scopes, and output attribution remain
-    independent. A single physical model processes the complete panel request,
-    which guarantees at most one successful detection completion per run.
+
+class BatchedExpertRunner:
+    """Execute Router-selected Experts in bounded structured-output batches.
+
+    max_tasks and max_batch_characters apply to each physical request. Every
+    logical task that fits by itself is eventually submitted, so a Router
+    escalation cannot silently discard later Expert assignments.
     """
 
-    prompt_version = "batched-expert-v6-validator-counterevidence"
+    prompt_version = "batched-expert-v7-exact-task-results"
 
     def __init__(
         self,
@@ -146,9 +158,7 @@ class BatchedExpertRunner:
         candidates: list[Candidate],
         routes: list[RouteDecision],
     ) -> ExpertRunOutput:
-        by_id = {candidate.candidate_id: candidate for candidate in candidates}
         routes_by_id = {route.candidate_id: route for route in routes}
-        skipped = 0
         desired: dict[str, list[ExpertFamily]] = {}
         for candidate in candidates:
             route = routes_by_id[candidate.candidate_id]
@@ -157,27 +167,113 @@ class BatchedExpertRunner:
                     assignment.expert for assignment in route.assignments
                 )
             ) or list(dict.fromkeys(route.selected))
-        task_count = sum(len(experts) for experts in desired.values())
 
-        # Two-pass project budget: reserve every candidate's Top-2 work before
-        # spending tasks on any Full-5 escalation extras.  Escalation extras are
-        # then ordered by lowest sufficiency confidence and highest static
-        # suspicion so an early Full-5 candidate cannot starve later Top-2 work.
-        allocations: dict[str, list[ExpertFamily]] = {
-            candidate.candidate_id: [] for candidate in candidates
-        }
+        ordered_assignments = self._ordered_assignments(
+            candidates,
+            routes_by_id,
+            desired,
+        )
+        tasks = [
+            _BatchedTask(
+                task_id=f"T{index:05d}",
+                candidate=candidate,
+                expert=expert,
+                context=self.context_builder.build(candidate, expert),
+            )
+            for index, (candidate, expert) in enumerate(
+                ordered_assignments,
+                start=1,
+            )
+        ]
+        batches, oversized = self._partition_batches(tasks)
+
+        findings: list[Finding] = []
+        usage: list[UsageRecord] = []
+        errors: list[str] = []
+        completed_task_count = 0
+        submitted_task_count = 0
+
+        for batch_index, batch in enumerate(batches, start=1):
+            packets, task_lookup = self._build_packets(batch)
+            submitted_task_count += len(batch)
+            try:
+                response = self.client.complete(
+                    model=self.model,
+                    messages=batched_expert_messages(packets),
+                    response_schema=batched_findings_schema(list(task_lookup)),
+                    metadata={
+                        "task": "batched_experts",
+                        "batch_index": batch_index,
+                        "batch_count": len(batches),
+                        "task_count": len(task_lookup),
+                        "candidate_count": len(packets),
+                    },
+                )
+            except RuntimeError as error:
+                errors.append(
+                    f"Expert batch {batch_index}/{len(batches)} request failed: {error}"
+                )
+                remaining = sum(
+                    len(item)
+                    for item in batches[batch_index:]
+                )
+                if remaining:
+                    errors.append(
+                        f"Stopped before submitting {remaining} remaining Expert tasks."
+                    )
+                break
+            batch_findings, batch_errors, batch_completed = (
+                self._parse_batch_response(
+                    response.data,
+                    task_lookup,
+                    model_id=response.usage.model,
+                )
+            )
+            findings.extend(batch_findings)
+            usage.append(response.usage)
+            completed_task_count += batch_completed
+            errors.extend(
+                f"Expert batch {batch_index}/{len(batches)}: {error}"
+                for error in batch_errors
+            )
+
+        if oversized:
+            errors.append(
+                "Skipped Expert tasks that individually exceeded the prompt budget "
+                f"of {self.max_batch_characters} characters: "
+                + ", ".join(task.task_id for task in oversized)
+            )
+
+        return ExpertRunOutput(
+            findings=findings,
+            usage=usage,
+            errors=errors,
+            task_count=len(tasks),
+            submitted_task_count=submitted_task_count,
+            completed_task_count=completed_task_count,
+            skipped_task_count=len(oversized),
+        )
+
+    def _ordered_assignments(
+        self,
+        candidates: list[Candidate],
+        routes_by_id: dict[str, RouteDecision],
+        desired: dict[str, list[ExpertFamily]],
+    ) -> list[tuple[Candidate, ExpertFamily]]:
+        """Prioritize every candidate's Top-2 before Full-5 escalation extras."""
+
         candidate_order = sorted(
             enumerate(candidates),
             key=lambda item: (-item[1].suspicion_score, item[0]),
         )
-        base_chunks = [
-            (candidate, desired[candidate.candidate_id][:2])
+        base = [
+            (candidate, expert)
             for _, candidate in candidate_order
-            if desired[candidate.candidate_id]
+            for expert in desired[candidate.candidate_id][:2]
         ]
-        extra_chunks = sorted(
+        extras = sorted(
             [
-                (candidate, [expert])
+                (candidate, expert)
                 for candidate in candidates
                 for expert in desired[candidate.candidate_id][2:]
             ],
@@ -187,99 +283,91 @@ class BatchedExpertRunner:
                 else 1.0,
                 -item[0].suspicion_score,
                 item[0].candidate_id,
-                item[1][0].value,
+                item[1].value,
             ),
         )
-        for candidate, experts in [*base_chunks, *extra_chunks]:
-            if not experts:
-                continue
-            # Never submit escalation extras when that candidate's Top-2 pair
-            # could not be admitted to the shared request.
-            if experts[0] in desired[candidate.candidate_id][2:] and len(
-                allocations[candidate.candidate_id]
-            ) < min(2, len(desired[candidate.candidate_id])):
-                skipped += len(experts)
-                continue
-            proposed = {
-                candidate_id: list(selected)
-                for candidate_id, selected in allocations.items()
-            }
-            proposed[candidate.candidate_id].extend(experts)
-            proposed_count = sum(len(selected) for selected in proposed.values())
-            if proposed_count > self.max_tasks:
-                skipped += len(experts)
-                continue
-            proposed_packets, proposed_lookup = self._build_packets(
-                candidates, proposed
-            )
-            prompt_size = sum(
-                len(message["content"])
-                for message in batched_expert_messages(proposed_packets)
-            )
-            if prompt_size > self.max_batch_characters:
-                skipped += len(experts)
-                continue
-            allocations = proposed
+        return [*base, *extras]
 
-        packets, task_lookup = self._build_packets(candidates, allocations)
+    def _partition_batches(
+        self,
+        tasks: list[_BatchedTask],
+    ) -> tuple[list[list[_BatchedTask]], list[_BatchedTask]]:
+        batches: list[list[_BatchedTask]] = []
+        current: list[_BatchedTask] = []
+        oversized: list[_BatchedTask] = []
 
-        if not task_lookup:
-            errors = []
-            if skipped:
-                errors.append(
-                    f"All {skipped} Expert tasks exceeded the batch prompt budget "
-                    f"({self.max_batch_characters} characters or {self.max_tasks} tasks)."
-                )
-            return ExpertRunOutput(
-                findings=[],
-                usage=[],
-                errors=errors,
-                task_count=task_count,
-                submitted_task_count=0,
-                skipped_task_count=skipped,
-            )
+        for task in tasks:
+            proposed = [*current, task]
+            if self._fits_batch(proposed):
+                current = proposed
+                continue
 
-        response = self.client.complete(
-            model=self.model,
-            messages=batched_expert_messages(packets),
-            response_schema=batched_findings_schema(),
-            metadata={
-                "task": "batched_experts",
-                "task_count": len(task_lookup),
-                "candidate_count": len(packets),
-            },
+            if current:
+                batches.append(current)
+                current = []
+
+            if self._fits_batch([task]):
+                current = [task]
+            else:
+                oversized.append(task)
+
+        if current:
+            batches.append(current)
+        return batches, oversized
+
+    def _fits_batch(self, tasks: list[_BatchedTask]) -> bool:
+        if not tasks or len(tasks) > self.max_tasks:
+            return False
+        packets, _ = self._build_packets(tasks)
+        prompt_size = sum(
+            len(message["content"])
+            for message in batched_expert_messages(packets)
         )
+        return prompt_size <= self.max_batch_characters
+
+    def _parse_batch_response(
+        self,
+        data: dict[str, Any],
+        task_lookup: dict[str, tuple[Candidate, ExpertFamily]],
+        *,
+        model_id: str,
+    ) -> tuple[list[Finding], list[str], int]:
         findings: list[Finding] = []
         errors: list[str] = []
+        completed: set[str] = set()
         seen: set[str] = set()
-        reviewed = {
-            str(task_id)
-            for task_id in response.data.get("reviewed_task_ids", [])
-        }
-        unknown_reviewed = sorted(reviewed - set(task_lookup))
-        if unknown_reviewed:
-            errors.append(
-                "Model returned unknown reviewed task IDs: "
-                + ", ".join(unknown_reviewed)
-            )
-        missing_reviews = sorted(set(task_lookup) - reviewed)
-        if missing_reviews:
-            errors.append(
-                "Model did not confirm review of Expert tasks: "
-                + ", ".join(missing_reviews)
-            )
-        payloads = response.data.get("expert_results", [])
+        payloads = data.get("expert_results", [])
+
         if not isinstance(payloads, list):
-            raise TypeError("The model response 'expert_results' field must be a list")
+            return (
+                [],
+                ["The model response 'expert_results' field must be a list"],
+                0,
+            )
+
         for payload in payloads:
+            if not isinstance(payload, dict):
+                errors.append("Expert result must be an object")
+                continue
+
+            raw_task_id = payload.get("task_id")
+            if raw_task_id is None:
+                errors.append("Expert result is missing task_id")
+                continue
+            task_id = str(raw_task_id)
+
+            # Provider-side schemas are not trusted as the only safety layer.
+            # Unknown IDs are reported and discarded before any lookup.
+            if task_id not in task_lookup:
+                errors.append(f"Model returned unknown Expert task ID: {task_id}")
+                continue
+            if task_id in seen:
+                errors.append(f"Duplicate Expert result: {task_id}")
+                continue
+            seen.add(task_id)
+
+            candidate, expert = task_lookup[task_id]
             try:
-                task_id = str(payload["task_id"])
-                if task_id in seen:
-                    raise ValueError(f"Duplicate Expert result: {task_id}")
-                seen.add(task_id)
-                if task_id not in reviewed:
-                    raise ValueError(f"Unreviewed Expert result: {task_id}")
-                candidate, expert = task_lookup[task_id]
                 if str(payload["candidate_id"]) != candidate.candidate_id:
                     raise ValueError(f"Candidate mismatch for {task_id}")
                 if ExpertFamily(str(payload["expert"])) != expert:
@@ -287,73 +375,67 @@ class BatchedExpertRunner:
                 task_findings = payload.get("findings", [])
                 if not isinstance(task_findings, list):
                     raise TypeError(f"Findings for {task_id} must be a list")
-                for index, finding_payload in enumerate(task_findings, start=1):
-                    findings.append(
-                        finding_from_payload(
-                            finding_payload,
-                            index=index,
-                            candidate=candidate,
-                            expert=expert,
-                            model_id=response.usage.model,
-                            prompt_version=self.prompt_version,
-                        )
+
+                converted = [
+                    finding_from_payload(
+                        finding_payload,
+                        index=index,
+                        candidate=candidate,
+                        expert=expert,
+                        model_id=model_id,
+                        prompt_version=self.prompt_version,
                     )
+                    for index, finding_payload in enumerate(
+                        task_findings,
+                        start=1,
+                    )
+                ]
             except (KeyError, TypeError, ValueError) as error:
                 errors.append(str(error))
-        if skipped:
+                continue
+
+            findings.extend(converted)
+            completed.add(task_id)
+
+        missing = sorted(set(task_lookup) - completed)
+        if missing:
             errors.append(
-                f"Skipped {skipped} Expert tasks because the batch prompt exceeded "
-                f"{self.max_batch_characters} characters or {self.max_tasks} tasks."
+                "Model did not return a valid result for Expert tasks: "
+                + ", ".join(missing)
             )
-        return ExpertRunOutput(
-            findings=findings,
-            usage=[response.usage],
-            errors=errors,
-            task_count=task_count,
-            submitted_task_count=len(task_lookup),
-            skipped_task_count=skipped,
-        )
+        return findings, errors, len(completed)
 
     def _build_packets(
         self,
-        candidates: list[Candidate],
-        allocations: dict[str, list[ExpertFamily]],
+        tasks: list[_BatchedTask],
     ) -> tuple[list[dict[str, Any]], dict[str, tuple[Candidate, ExpertFamily]]]:
+        grouped: dict[str, list[_BatchedTask]] = {}
+        for task in tasks:
+            grouped.setdefault(task.candidate.candidate_id, []).append(task)
+
         packets: list[dict[str, Any]] = []
         lookup: dict[str, tuple[Candidate, ExpertFamily]] = {}
-        for candidate in candidates:
-            experts = allocations.get(candidate.candidate_id, [])
-            if not experts:
-                continue
-            packet, packet_tasks = self._candidate_packet(
-                candidate,
-                experts,
-                start_index=len(lookup) + 1,
-            )
+        for candidate_tasks in grouped.values():
+            packet, packet_tasks = self._candidate_packet(candidate_tasks)
             packets.append(packet)
             lookup.update(packet_tasks)
         return packets, lookup
 
     def _candidate_packet(
         self,
-        candidate: Candidate,
-        experts: list[ExpertFamily],
-        *,
-        start_index: int,
+        tasks: list[_BatchedTask],
     ) -> tuple[dict[str, Any], dict[str, tuple[Candidate, ExpertFamily]]]:
-        tasks = []
+        candidate = tasks[0].candidate
+        task_payloads: list[dict[str, Any]] = []
         lookup: dict[str, tuple[Candidate, ExpertFamily]] = {}
-        shared_code = ""
-        shared_comments = ""
-        for offset, expert in enumerate(experts):
-            task_id = f"T{start_index + offset:05d}"
-            context = self.context_builder.build(candidate, expert)
-            shared_code = context.code
-            shared_comments = context.comments_untrusted
-            tasks.append(
+        comments: list[str] = []
+
+        for task in tasks:
+            context = task.context
+            task_payloads.append(
                 {
-                    "task_id": task_id,
-                    "expert": expert.value,
+                    "task_id": task.task_id,
+                    "expert": task.expert.value,
                     "static_evidence": context.evidence_text,
                     "vulnerability_slice": context.code_slice,
                     "evidence_graph": context.evidence_graph_text,
@@ -363,7 +445,10 @@ class BatchedExpertRunner:
                     "security_knowledge": context.knowledge_text,
                 }
             )
-            lookup[task_id] = (candidate, expert)
+            if context.comments_untrusted and context.comments_untrusted not in comments:
+                comments.append(context.comments_untrusted)
+            lookup[task.task_id] = (candidate, task.expert)
+
         return (
             {
                 "candidate_id": candidate.candidate_id,
@@ -376,9 +461,9 @@ class BatchedExpertRunner:
                 "suspicion_score": candidate.suspicion_score,
                 "callers": candidate.callers,
                 "callees": candidate.callees,
-                "normalized_code": shared_code,
-                "untrusted_comments": shared_comments or "(none)",
-                "expert_tasks": tasks,
+                "normalized_code": tasks[0].context.code,
+                "untrusted_comments": "\n".join(comments) or "(none)",
+                "expert_tasks": task_payloads,
             },
             lookup,
         )

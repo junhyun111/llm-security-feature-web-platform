@@ -149,6 +149,7 @@ export type AnalysisPayload = {
     total_cost: number
     request_count: number
     submitted_expert_task_count: number
+    completed_expert_task_count?: number
     skipped_expert_task_count?: number
     expert_task_count?: number
     pre_gate_candidate_count?: number

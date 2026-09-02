@@ -45,7 +45,7 @@ def analyze_source(
         config,
         router,
         max_batch_characters=120_000,
-        max_batch_tasks=24,
+        max_batch_tasks=6,
     ).run(case)
     payload = to_dict(result)
     destination = Path(output).expanduser().resolve()
@@ -83,4 +83,3 @@ def _read_sources(path: Path) -> dict[str, str]:
     if not sources:
         raise ValueError(f"No C/C++ source files found under {path}")
     return sources
-

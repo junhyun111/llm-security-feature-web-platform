@@ -125,7 +125,7 @@ def build_batched_web_pipeline(
     max_batch_characters: int,
     max_batch_tasks: int,
 ) -> VulnerabilityPipeline:
-    """Build the web pipeline with one LLM call for all logical Experts."""
+    """Build the web pipeline with bounded LLM batches for logical Experts."""
 
     client = build_openrouter_client(config)
     if isinstance(router, BudgetedUtilityRouter):

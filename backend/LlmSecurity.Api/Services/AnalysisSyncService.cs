@@ -35,7 +35,7 @@ public class AnalysisSyncService
         job.ErrorMessage = remote.Error;
         job.UpdatedAt = DateTime.UtcNow;
 
-        if (remote.Status == "completed")
+        if (remote.Status is "completed" or "partial")
         {
             job.CompletedAt ??= DateTime.UtcNow;
 

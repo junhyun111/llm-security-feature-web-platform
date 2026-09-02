@@ -266,6 +266,7 @@ class PipelineResult:
     errors: list[str] = field(default_factory=list)
     expert_task_count: int = 0
     submitted_expert_task_count: int = 0
+    completed_expert_task_count: int = 0
     skipped_expert_task_count: int = 0
 
     @property

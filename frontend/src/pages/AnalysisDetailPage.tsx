@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   ArrowLeft,
   Code2,
   Download,
@@ -182,7 +183,7 @@ export default function AnalysisDetailPage() {
         </div>
         <div className="detail-actions">
           <StatusBadge status={job.status} />
-          {job.status === 'completed' && (
+          {['completed', 'partial'].includes(job.status) && (
             <a className="secondary-button compact" href={api.downloadUrl(`/api/analyses/${job.id}/download`)}>
               <Download size={15} /> 프로젝트 다운로드
             </a>
@@ -205,6 +206,12 @@ export default function AnalysisDetailPage() {
       {job.status === 'failed' && (
         <section className="panel danger-panel">
           <XCircle /><div><h2>분석에 실패했습니다.</h2><p>{job.errorMessage || job.message}</p></div>
+        </section>
+      )}
+
+      {job.status === 'partial' && (
+        <section className="panel warning-panel">
+          <AlertTriangle /><div><h2>일부 분석만 완료되었습니다.</h2><p>{job.errorMessage || job.message}</p></div>
         </section>
       )}
 
@@ -324,7 +331,9 @@ function OverviewPanel({
           <h2>Scan summary</h2>
           <dl>
             <div><dt>CWE hypotheses</dt><dd>{analysis.summary.cwe_hypothesis_count}</dd></div>
+            <div><dt>Planned expert tasks</dt><dd>{analysis.summary.expert_task_count ?? analysis.summary.submitted_expert_task_count}</dd></div>
             <div><dt>Submitted expert tasks</dt><dd>{analysis.summary.submitted_expert_task_count}</dd></div>
+            <div><dt>Completed expert tasks</dt><dd>{analysis.summary.completed_expert_task_count ?? analysis.summary.submitted_expert_task_count}</dd></div>
             <div><dt>Skipped expert tasks</dt><dd>{analysis.summary.skipped_expert_task_count ?? 0}</dd></div>
             <div><dt>Structural rejections</dt><dd>{analysis.summary.structural_rejected_count ?? 0}</dd></div>
             <div><dt>Pipeline errors</dt><dd>{analysis.errors?.length || 0}</dd></div>

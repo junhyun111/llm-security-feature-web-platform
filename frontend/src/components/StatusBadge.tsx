@@ -3,6 +3,7 @@ const labels: Record<string, string> = {
   queued: '대기',
   analyzing: '분석 중',
   completed: '완료',
+  partial: '부분 완료',
   failed: '실패',
   validated: '검증됨',
   rejected: '기각',
