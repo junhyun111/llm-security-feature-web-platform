@@ -23,7 +23,20 @@ public record AnalysisJobResponse(
 
 public record AnalysisDetailResponse(
     AnalysisJobResponse Job,
-    JsonElement? Analysis
+    JsonElement? Analysis,
+    AnalysisSyncInfo Sync
+);
+
+public record AnalysisStatusResponse(
+    AnalysisJobResponse Job,
+    AnalysisSyncInfo Sync
+);
+
+public record AnalysisSyncInfo(
+    string State,
+    string? Warning,
+    DateTime? LastSuccessfulSyncAt,
+    string? TraceId
 );
 
 public record PatchProposalRequest(List<string> FindingIds, string ApiKey);

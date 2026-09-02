@@ -169,4 +169,17 @@ export type AnalysisPayload = {
 export type AnalysisDetail = {
   job: AnalysisJob
   analysis?: AnalysisPayload | null
+  sync: AnalysisSyncInfo
+}
+
+export type AnalysisSyncInfo = {
+  state: 'fresh' | 'cached' | 'stale' | string
+  warning?: string | null
+  lastSuccessfulSyncAt?: string | null
+  traceId?: string | null
+}
+
+export type AnalysisStatus = {
+  job: AnalysisJob
+  sync: AnalysisSyncInfo
 }

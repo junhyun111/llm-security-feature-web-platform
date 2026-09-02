@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Net;
 using System.Text.Json;
 using LlmSecurity.Api.Data;
 using LlmSecurity.Api.Models;
@@ -7,19 +10,102 @@ namespace LlmSecurity.Api.Services;
 
 public class AnalysisSyncService
 {
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> JobLocks = new();
+    private static readonly TimeSpan StatusSyncTimeout = TimeSpan.FromSeconds(15);
     private readonly ApplicationDbContext _db;
     private readonly PythonAnalyzerClient _analyzer;
+    private readonly ILogger<AnalysisSyncService> _logger;
 
     public AnalysisSyncService(
         ApplicationDbContext db,
-        PythonAnalyzerClient analyzer)
+        PythonAnalyzerClient analyzer,
+        ILogger<AnalysisSyncService> logger)
     {
         _db = db;
         _analyzer = analyzer;
+        _logger = logger;
+    }
+
+    public async Task<AnalysisSyncResult> TrySyncAsync(
+        AnalysisJob job,
+        bool includeAnalysis,
+        CancellationToken cancellationToken = default)
+    {
+        var gate = JobLocks.GetOrAdd(job.Id, _ => new SemaphoreSlim(1, 1));
+        if (!await gate.WaitAsync(0, cancellationToken))
+        {
+            return new AnalysisSyncResult(
+                job,
+                "cached",
+                null,
+                job.UpdatedAt,
+                null);
+        }
+
+        var lastSuccessfulSyncAt = job.UpdatedAt;
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken);
+            timeout.CancelAfter(StatusSyncTimeout);
+
+            var synced = await SyncAsync(job, includeAnalysis, timeout.Token);
+            return new AnalysisSyncResult(
+                synced,
+                "fresh",
+                null,
+                synced.UpdatedAt,
+                null);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return await StaleResultAsync(
+                job,
+                lastSuccessfulSyncAt,
+                "분석 Runtime 상태 조회 시간이 초과되었습니다.",
+                null,
+                cancellationToken);
+        }
+        catch (AnalyzerApiException error) when (
+            error.StatusCode == HttpStatusCode.Conflict ||
+            error.StatusCode == HttpStatusCode.NotFound ||
+            (int)error.StatusCode >= 500)
+        {
+            return await StaleResultAsync(
+                job,
+                lastSuccessfulSyncAt,
+                "분석 Runtime 상태를 일시적으로 갱신하지 못했습니다.",
+                error,
+                cancellationToken);
+        }
+        catch (HttpRequestException error)
+        {
+            return await StaleResultAsync(
+                job,
+                lastSuccessfulSyncAt,
+                "분석 Runtime에 일시적으로 연결할 수 없습니다.",
+                error,
+                cancellationToken);
+        }
+        catch (Exception error) when (
+            error is JsonException or DbUpdateException or InvalidOperationException)
+        {
+            return await StaleResultAsync(
+                job,
+                lastSuccessfulSyncAt,
+                "저장된 마지막 분석 상태를 표시하고 있습니다.",
+                error,
+                cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     public async Task<AnalysisJob> SyncAsync(
         AnalysisJob job,
+        bool includeAnalysis = true,
         CancellationToken cancellationToken = default)
     {
         var remote = await _analyzer.GetJobAsync(job.AnalyzerJobId, cancellationToken);
@@ -39,17 +125,70 @@ public class AnalysisSyncService
         {
             job.CompletedAt ??= DateTime.UtcNow;
 
-            var analysisJson = await _analyzer.GetAnalysisJsonAsync(
-                job.AnalyzerJobId,
-                cancellationToken);
+            if (includeAnalysis)
+            {
+                var analysisJson = await _analyzer.GetAnalysisJsonAsync(
+                    job.AnalyzerJobId,
+                    cancellationToken);
 
-            job.AnalysisJson = analysisJson;
-            await ReplaceFindingsAsync(job, analysisJson, cancellationToken);
-            await UpsertPatchBatchFromAnalysisAsync(job, analysisJson, cancellationToken);
+                job.AnalysisJson = analysisJson;
+                await ReplaceFindingsAsync(job, analysisJson, cancellationToken);
+                await UpsertPatchBatchFromAnalysisAsync(job, analysisJson, cancellationToken);
+            }
         }
 
         await _db.SaveChangesAsync(cancellationToken);
         return job;
+    }
+
+    private async Task<AnalysisSyncResult> StaleResultAsync(
+        AnalysisJob job,
+        DateTime? lastSuccessfulSyncAt,
+        string warning,
+        Exception? error,
+        CancellationToken cancellationToken)
+    {
+        var traceId = Activity.Current?.Id;
+        if (error is null)
+        {
+            _logger.LogWarning(
+                "Runtime status sync timed out for analysis {AnalysisId}; traceId={TraceId}",
+                job.Id,
+                traceId);
+        }
+        else
+        {
+            _logger.LogWarning(
+                error,
+                "Runtime status sync failed for analysis {AnalysisId}; traceId={TraceId}",
+                job.Id,
+                traceId);
+        }
+
+        try
+        {
+            _db.ChangeTracker.Clear();
+            var cached = await _db.AnalysisJobs
+                .SingleOrDefaultAsync(x => x.Id == job.Id, cancellationToken);
+            if (cached is not null)
+                job = cached;
+        }
+        catch (Exception reloadError) when (
+            reloadError is DbUpdateException or InvalidOperationException)
+        {
+            _logger.LogError(
+                reloadError,
+                "Cached analysis state reload failed for {AnalysisId}; traceId={TraceId}",
+                job.Id,
+                traceId);
+        }
+
+        return new AnalysisSyncResult(
+            job,
+            "stale",
+            warning,
+            lastSuccessfulSyncAt,
+            traceId);
     }
 
     public async Task StorePatchResponseAsync(
@@ -200,3 +339,10 @@ public class AnalysisSyncService
             ? result
             : 0;
 }
+
+public sealed record AnalysisSyncResult(
+    AnalysisJob Job,
+    string State,
+    string? Warning,
+    DateTime? LastSuccessfulSyncAt,
+    string? TraceId);

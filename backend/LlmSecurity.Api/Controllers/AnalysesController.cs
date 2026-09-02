@@ -1,4 +1,5 @@
 using System.Net;
+using System.Diagnostics;
 using System.Text.Json;
 using LlmSecurity.Api.Data;
 using LlmSecurity.Api.DTOs;
@@ -14,23 +15,26 @@ namespace LlmSecurity.Api.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/analyses")]
-public class AnalysesController : ControllerBase
+public class AnalysesController : ApiControllerBase
 {
     private readonly ApplicationDbContext _db;
     private readonly UserManager<AppUser> _userManager;
     private readonly PythonAnalyzerClient _analyzer;
     private readonly AnalysisSyncService _sync;
+    private readonly ILogger<AnalysesController> _logger;
 
     public AnalysesController(
         ApplicationDbContext db,
         UserManager<AppUser> userManager,
         PythonAnalyzerClient analyzer,
-        AnalysisSyncService sync)
+        AnalysisSyncService sync,
+        ILogger<AnalysesController> logger)
     {
         _db = db;
         _userManager = userManager;
         _analyzer = analyzer;
         _sync = sync;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -61,10 +65,10 @@ public class AnalysesController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (files.Count == 0)
-            return BadRequest(new { message = "분석할 파일을 선택해주세요." });
+            return ApiProblem(400, "분석할 파일을 선택해주세요.", "ANALYSIS_FILES_REQUIRED");
 
         if (files.Count != relativePaths.Count)
-            return BadRequest(new { message = "파일과 상대 경로 개수가 일치하지 않습니다." });
+            return ApiProblem(400, "파일과 상대 경로 개수가 일치하지 않습니다.", "ANALYSIS_FILE_PATH_MISMATCH");
 
         try
         {
@@ -102,13 +106,14 @@ public class AnalysesController : ControllerBase
         }
         catch (AnalyzerApiException ex)
         {
-            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+            return ApiProblem((int)ex.StatusCode, ex.Message, "ANALYZER_REQUEST_FAILED");
         }
         catch (HttpRequestException)
         {
-            return StatusCode(
-                StatusCodes.Status503ServiceUnavailable,
-                new { message = "Python 분석 서버에 연결할 수 없습니다. 분석 서버가 실행 중인지 확인해주세요." });
+            return ApiProblem(
+                503,
+                "Python 분석 서버에 연결할 수 없습니다. 분석 서버가 실행 중인지 확인해주세요.",
+                "RUNTIME_UNAVAILABLE");
         }
     }
 
@@ -121,32 +126,70 @@ public class AnalysesController : ControllerBase
         if (job is null)
             return NotFound();
 
-        try
+        var sync = CachedSync(job);
+        if (NeedsDetailSync(job))
         {
-            if (job.Status is "uploading" or "queued" or "analyzing" ||
-                job.AnalysisJson is null)
-            {
-                await _sync.SyncAsync(job, cancellationToken);
-            }
-        }
-        catch (AnalyzerApiException ex) when (ex.StatusCode == HttpStatusCode.Conflict)
-        {
-            // 분석 진행 중이면 DB에 저장된 상태를 그대로 응답한다.
-        }
-        catch (HttpRequestException)
-        {
-            // 분석기 일시 중단 시에도 기존 DB 이력은 조회할 수 있게 한다.
+            sync = await _sync.TrySyncAsync(
+                job,
+                includeAnalysis: true,
+                cancellationToken);
+            job = sync.Job;
         }
 
         JsonElement? analysis = null;
 
         if (!string.IsNullOrWhiteSpace(job.AnalysisJson))
         {
-            using var doc = JsonDocument.Parse(job.AnalysisJson);
-            analysis = doc.RootElement.Clone();
+            try
+            {
+                using var doc = JsonDocument.Parse(job.AnalysisJson);
+                analysis = doc.RootElement.Clone();
+            }
+            catch (JsonException error)
+            {
+                var traceId = Activity.Current?.Id ?? HttpContext.TraceIdentifier;
+                _logger.LogError(
+                    error,
+                    "Stored analysis JSON is invalid for {AnalysisId}; traceId={TraceId}",
+                    job.Id,
+                    traceId);
+                sync = sync with
+                {
+                    State = "stale",
+                    Warning = "저장된 분석 결과를 일시적으로 불러오지 못했습니다.",
+                    TraceId = traceId
+                };
+            }
         }
 
-        return Ok(new AnalysisDetailResponse(ToResponse(job), analysis));
+        return Ok(new AnalysisDetailResponse(
+            ToResponse(job),
+            analysis,
+            ToSyncInfo(sync)));
+    }
+
+    [HttpGet("{id:guid}/status")]
+    public async Task<ActionResult<AnalysisStatusResponse>> Status(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var job = await GetOwnedJob(id, cancellationToken);
+        if (job is null)
+            return NotFound();
+
+        var sync = CachedSync(job);
+        if (IsActive(job.Status))
+        {
+            sync = await _sync.TrySyncAsync(
+                job,
+                includeAnalysis: false,
+                cancellationToken);
+            job = sync.Job;
+        }
+
+        return Ok(new AnalysisStatusResponse(
+            ToResponse(job),
+            ToSyncInfo(sync)));
     }
 
     [HttpDelete("{id:guid}")]
@@ -158,12 +201,12 @@ public class AnalysesController : ControllerBase
         if (job is null)
             return NotFound();
 
-        if (job.Status is "uploading" or "queued" or "analyzing")
+        if (IsActive(job.Status))
         {
-            return Conflict(new
-            {
-                message = "진행 중인 분석은 완료 또는 실패 후 삭제할 수 있습니다."
-            });
+            return ApiProblem(
+                409,
+                "진행 중인 분석은 완료 또는 실패 후 삭제할 수 있습니다.",
+                "ANALYSIS_ACTIVE");
         }
 
         try
@@ -176,18 +219,59 @@ public class AnalysesController : ControllerBase
         }
         catch (AnalyzerApiException ex)
         {
-            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+            return ApiProblem((int)ex.StatusCode, ex.Message, "ANALYZER_REQUEST_FAILED");
         }
         catch (HttpRequestException)
         {
-            return StatusCode(
-                StatusCodes.Status503ServiceUnavailable,
-                new { message = "Python 분석 서버에 연결할 수 없어 이력을 안전하게 삭제하지 못했습니다." });
+            return ApiProblem(
+                503,
+                "Python 분석 서버에 연결할 수 없어 이력을 안전하게 삭제하지 못했습니다.",
+                "RUNTIME_UNAVAILABLE");
         }
 
         _db.AnalysisJobs.Remove(job);
         await _db.SaveChangesAsync(cancellationToken);
         return NoContent();
+    }
+
+    [HttpPost("{id:guid}/cancel")]
+    public async Task<ActionResult<AnalysisJobResponse>> Cancel(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var job = await GetOwnedJob(id, cancellationToken);
+        if (job is null)
+            return NotFound();
+
+        if (job.Status is not ("uploading" or "queued" or "analyzing" or "cancelling"))
+        {
+            return ApiProblem(409, "진행 중인 분석만 중단할 수 있습니다.", "ANALYSIS_NOT_ACTIVE");
+        }
+
+        try
+        {
+            var remote = await _analyzer.CancelJobAsync(
+                job.AnalyzerJobId,
+                cancellationToken);
+            job.Status = remote.Status;
+            job.Progress = remote.Progress;
+            job.Message = remote.Message;
+            job.ErrorMessage = remote.Error;
+            job.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(cancellationToken);
+            return Ok(ToResponse(job));
+        }
+        catch (AnalyzerApiException ex)
+        {
+            return ApiProblem((int)ex.StatusCode, ex.Message, "ANALYZER_REQUEST_FAILED");
+        }
+        catch (HttpRequestException)
+        {
+            return ApiProblem(
+                503,
+                "Python 분석 서버에 연결할 수 없어 중단 요청을 전달하지 못했습니다.",
+                "RUNTIME_UNAVAILABLE");
+        }
     }
 
     [HttpPost("{id:guid}/patches/proposal")]
@@ -201,7 +285,7 @@ public class AnalysesController : ControllerBase
             return NotFound();
 
         if (request.FindingIds.Count == 0)
-            return BadRequest(new { message = "수정할 취약점을 하나 이상 선택해주세요." });
+            return ApiProblem(400, "수정할 취약점을 하나 이상 선택해주세요.", "FINDINGS_REQUIRED");
 
         try
         {
@@ -218,7 +302,7 @@ public class AnalysesController : ControllerBase
         }
         catch (AnalyzerApiException ex)
         {
-            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+            return ApiProblem((int)ex.StatusCode, ex.Message, "ANALYZER_REQUEST_FAILED");
         }
     }
 
@@ -242,13 +326,14 @@ public class AnalysesController : ControllerBase
         }
         catch (AnalyzerApiException ex)
         {
-            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+            return ApiProblem((int)ex.StatusCode, ex.Message, "ANALYZER_REQUEST_FAILED");
         }
         catch (HttpRequestException)
         {
-            return StatusCode(
-                StatusCodes.Status503ServiceUnavailable,
-                new { message = "분석 Runtime에서 소스 파일 목록을 불러올 수 없습니다." });
+            return ApiProblem(
+                503,
+                "분석 Runtime에서 소스 파일 목록을 불러올 수 없습니다.",
+                "RUNTIME_UNAVAILABLE");
         }
     }
 
@@ -263,7 +348,7 @@ public class AnalysesController : ControllerBase
         if (job is null)
             return NotFound();
         if (string.IsNullOrWhiteSpace(path))
-            return BadRequest(new { message = "조회할 소스 파일 경로를 입력해주세요." });
+            return ApiProblem(400, "조회할 소스 파일 경로를 입력해주세요.", "FILE_PATH_REQUIRED");
 
         try
         {
@@ -276,13 +361,14 @@ public class AnalysesController : ControllerBase
         }
         catch (AnalyzerApiException ex)
         {
-            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+            return ApiProblem((int)ex.StatusCode, ex.Message, "ANALYZER_REQUEST_FAILED");
         }
         catch (HttpRequestException)
         {
-            return StatusCode(
-                StatusCodes.Status503ServiceUnavailable,
-                new { message = "분석 Runtime에서 소스 파일을 불러올 수 없습니다." });
+            return ApiProblem(
+                503,
+                "분석 Runtime에서 소스 파일을 불러올 수 없습니다.",
+                "RUNTIME_UNAVAILABLE");
         }
     }
 
@@ -297,7 +383,7 @@ public class AnalysesController : ControllerBase
         if (job is null)
             return NotFound();
         if (string.IsNullOrWhiteSpace(path))
-            return BadRequest(new { message = "미리 볼 소스 파일 경로를 입력해주세요." });
+            return ApiProblem(400, "미리 볼 소스 파일 경로를 입력해주세요.", "FILE_PATH_REQUIRED");
 
         try
         {
@@ -310,13 +396,14 @@ public class AnalysesController : ControllerBase
         }
         catch (AnalyzerApiException ex)
         {
-            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+            return ApiProblem((int)ex.StatusCode, ex.Message, "ANALYZER_REQUEST_FAILED");
         }
         catch (HttpRequestException)
         {
-            return StatusCode(
-                StatusCodes.Status503ServiceUnavailable,
-                new { message = "패치 미리보기를 생성할 수 없습니다." });
+            return ApiProblem(
+                503,
+                "패치 미리보기를 생성할 수 없습니다.",
+                "RUNTIME_UNAVAILABLE");
         }
     }
 
@@ -332,7 +419,7 @@ public class AnalysesController : ControllerBase
             return NotFound();
 
         if (action is not ("approve" or "reject"))
-            return BadRequest(new { message = "지원하지 않는 패치 작업입니다." });
+            return ApiProblem(400, "지원하지 않는 패치 작업입니다.", "PATCH_ACTION_INVALID");
 
         try
         {
@@ -348,7 +435,7 @@ public class AnalysesController : ControllerBase
         }
         catch (AnalyzerApiException ex)
         {
-            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+            return ApiProblem((int)ex.StatusCode, ex.Message, "ANALYZER_REQUEST_FAILED");
         }
     }
 
@@ -381,7 +468,7 @@ public class AnalysesController : ControllerBase
         }
         catch (AnalyzerApiException ex)
         {
-            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+            return ApiProblem((int)ex.StatusCode, ex.Message, "ANALYZER_REQUEST_FAILED");
         }
     }
 
@@ -396,6 +483,27 @@ public class AnalysesController : ControllerBase
                 x => x.Id == id && x.UserId == userId,
                 cancellationToken);
     }
+
+    private static bool IsActive(string status) =>
+        status is "uploading" or "queued" or "analyzing" or "cancelling";
+
+    private static bool NeedsDetailSync(AnalysisJob job) =>
+        IsActive(job.Status) ||
+        (job.Status is "completed" or "partial" &&
+         string.IsNullOrWhiteSpace(job.AnalysisJson));
+
+    private static AnalysisSyncResult CachedSync(AnalysisJob job) => new(
+        job,
+        "fresh",
+        null,
+        job.UpdatedAt,
+        null);
+
+    private static AnalysisSyncInfo ToSyncInfo(AnalysisSyncResult sync) => new(
+        sync.State,
+        sync.Warning,
+        sync.LastSuccessfulSyncAt,
+        sync.TraceId);
 
     private static AnalysisJobResponse ToResponse(AnalysisJob x) => new(
         x.Id,

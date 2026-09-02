@@ -2,8 +2,10 @@ using LlmSecurity.Api.Data;
 using LlmSecurity.Api.Models;
 using LlmSecurity.Api.Services;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
@@ -54,15 +56,17 @@ builder.Services.ConfigureApplicationCookie(options =>
     options.Cookie.SameSite = SameSiteMode.Lax;
     options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
     options.Events.OnRedirectToLogin = context =>
-    {
-        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        return Task.CompletedTask;
-    };
+        WriteAuthenticationProblemAsync(
+            context.HttpContext,
+            StatusCodes.Status401Unauthorized,
+            "로그인이 만료되었거나 인증이 필요합니다.",
+            "AUTHENTICATION_REQUIRED");
     options.Events.OnRedirectToAccessDenied = context =>
-    {
-        context.Response.StatusCode = StatusCodes.Status403Forbidden;
-        return Task.CompletedTask;
-    };
+        WriteAuthenticationProblemAsync(
+            context.HttpContext,
+            StatusCodes.Status403Forbidden,
+            "요청한 작업을 수행할 권한이 없습니다.",
+            "ACCESS_DENIED");
 });
 
 var frontendOrigin = builder.Configuration["Frontend:Origin"] ?? "http://localhost:5173";
@@ -88,6 +92,16 @@ builder.Services.AddHttpClient<OpenRouterCatalogClient>(client =>
 });
 
 builder.Services.AddScoped<AnalysisSyncService>();
+builder.Services.AddProblemDetails(options =>
+{
+    options.CustomizeProblemDetails = context =>
+    {
+        context.ProblemDetails.Extensions.TryAdd(
+            "traceId",
+            context.HttpContext.TraceIdentifier);
+    };
+});
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddControllers();
 
 var app = builder.Build();
@@ -96,6 +110,7 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
 });
+app.UseExceptionHandler();
 
 using (var scope = app.Services.CreateScope())
 {
@@ -131,3 +146,24 @@ if (File.Exists(spaIndex))
 }
 
 app.Run();
+
+static Task WriteAuthenticationProblemAsync(
+    HttpContext context,
+    int status,
+    string detail,
+    string code)
+{
+    context.Response.StatusCode = status;
+    var problem = new ProblemDetails
+    {
+        Status = status,
+        Title = status == StatusCodes.Status401Unauthorized
+            ? "Unauthorized"
+            : "Forbidden",
+        Detail = detail,
+        Instance = context.Request.Path
+    };
+    problem.Extensions["code"] = code;
+    problem.Extensions["traceId"] = context.TraceIdentifier;
+    return context.Response.WriteAsJsonAsync(problem);
+}

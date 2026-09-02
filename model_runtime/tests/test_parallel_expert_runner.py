@@ -4,7 +4,7 @@ import threading
 import unittest
 
 from llm_security.evidence import ExpertContext
-from llm_security.experts import ParallelExpertRunner
+from llm_security.experts import AnalysisCancelled, ParallelExpertRunner
 from llm_security.llm import LLMResponse
 from llm_security.models import (
     Candidate,
@@ -190,6 +190,21 @@ class ParallelExpertRunnerTest(unittest.TestCase):
         )
 
         self.assertEqual(100, runner.max_concurrency)
+
+    def test_cancelled_run_stops_before_submitting_requests(self) -> None:
+        client = ConcurrentClient(expected_concurrency=1)
+        runner = ParallelExpertRunner(
+            client=client,
+            model="test/model",
+            context_builder=ContextBuilder(),
+            max_concurrency=3,
+            cancel_callback=lambda: True,
+        )
+
+        with self.assertRaises(AnalysisCancelled):
+            runner.run([candidate(1)], [route(candidate(1))])
+
+        self.assertEqual([], client.calls)
 
 
 if __name__ == "__main__":

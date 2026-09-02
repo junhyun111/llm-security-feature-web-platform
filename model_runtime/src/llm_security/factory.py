@@ -188,6 +188,7 @@ def build_parallel_web_pipeline(
     *,
     max_concurrency: int,
     progress_callback: Callable[[ExpertProgress], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
 ) -> VulnerabilityPipeline:
     """Build the production web pipeline with one request per logical Expert."""
 
@@ -216,6 +217,7 @@ def build_parallel_web_pipeline(
             models_by_family=config.model.expert_models,
             max_concurrency=max_concurrency,
             progress_callback=progress_callback,
+            cancel_callback=cancel_callback,
         ),
         aggregator=FindingAggregator(),
         validator=EvidenceValidator(

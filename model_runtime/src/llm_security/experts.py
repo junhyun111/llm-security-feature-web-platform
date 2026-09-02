@@ -23,6 +23,10 @@ from .prompts import (
 )
 
 
+class AnalysisCancelled(RuntimeError):
+    """Raised when an authenticated user cancels an in-flight analysis."""
+
+
 @dataclass(slots=True)
 class ExpertRunOutput:
     findings: list[Finding]
@@ -158,6 +162,7 @@ class ParallelExpertRunner:
         models_by_family: dict[ExpertFamily, str] | None = None,
         max_concurrency: int = 100,
         progress_callback: Callable[[ExpertProgress], None] | None = None,
+        cancel_callback: Callable[[], bool] | None = None,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be positive")
@@ -167,12 +172,14 @@ class ParallelExpertRunner:
         self.models_by_family = dict(models_by_family or {})
         self.max_concurrency = min(100, max_concurrency)
         self.progress_callback = progress_callback
+        self.cancel_callback = cancel_callback
 
     def run(
         self,
         candidates: list[Candidate],
         routes: list[RouteDecision],
     ) -> ExpertRunOutput:
+        self._raise_if_cancelled()
         tasks = self._build_tasks(candidates, routes)
         total = len(tasks)
         if not tasks:
@@ -192,18 +199,32 @@ class ParallelExpertRunner:
             ExpertProgress(0, 0, 0, total, worker_count, self.max_concurrency)
         )
 
-        with ThreadPoolExecutor(
+        executor = ThreadPoolExecutor(
             max_workers=worker_count,
             thread_name_prefix="expert-request",
-        ) as executor:
+        )
+        cancelled = False
+        try:
             futures = {
                 executor.submit(self._run_task, task): task
                 for task in tasks
             }
             for future in as_completed(futures):
+                if self._is_cancelled():
+                    cancelled = True
+                    for pending in futures:
+                        pending.cancel()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise AnalysisCancelled("Analysis cancellation requested")
                 task = futures[future]
                 try:
                     result = future.result()
+                except AnalysisCancelled:
+                    cancelled = True
+                    for pending in futures:
+                        pending.cancel()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise
                 except Exception as error:  # isolate one remote Expert failure
                     failed += 1
                     errors[task.task_id] = (
@@ -231,6 +252,9 @@ class ParallelExpertRunner:
                         self.max_concurrency,
                     )
                 )
+        finally:
+            if not cancelled:
+                executor.shutdown(wait=True)
 
         findings: list[Finding] = []
         usage: list[UsageRecord] = []
@@ -314,6 +338,7 @@ class ParallelExpertRunner:
         ]
 
     def _run_task(self, task: ExpertTask) -> ExpertTaskResult:
+        self._raise_if_cancelled()
         candidate = task.candidate
         assignment = task.assignment
         expert = assignment.expert
@@ -329,6 +354,7 @@ class ParallelExpertRunner:
                 "expert": expert.value,
             },
         )
+        self._raise_if_cancelled()
         payloads = response.data.get("findings", [])
         if not isinstance(payloads, list):
             raise TypeError("The model response 'findings' field must be a list")
@@ -358,6 +384,13 @@ class ParallelExpertRunner:
         except Exception:
             # Progress persistence must never invalidate paid analysis work.
             pass
+
+    def _is_cancelled(self) -> bool:
+        return bool(self.cancel_callback and self.cancel_callback())
+
+    def _raise_if_cancelled(self) -> None:
+        if self._is_cancelled():
+            raise AnalysisCancelled("Analysis cancellation requested")
 
 
 @dataclass(slots=True)

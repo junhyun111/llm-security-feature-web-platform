@@ -150,6 +150,7 @@ class RequestAwareWebJobService(WebJobService):
         config.analysis.backend = "semantic"
         config.candidate_gate.enabled = self.settings.candidate_gate_enabled
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
+        self._raise_if_cancelled(job.job_id)
 
         progress(20, "Loading C/C++ source files")
         source_files = load_project_sources(
@@ -157,9 +158,11 @@ class RequestAwareWebJobService(WebJobService):
             max_file_bytes=self.settings.max_source_file_bytes,
             max_total_bytes=self.settings.max_source_total_bytes,
         )
+        self._raise_if_cancelled(job.job_id)
 
         progress(30, "Loading Router and static analyzer")
         router = load_router_artifact(self.settings.router_artifact)
+        self._raise_if_cancelled(job.job_id)
 
         case = ProjectCase(
             case_id=f"web-{job.job_id}",
@@ -175,7 +178,9 @@ class RequestAwareWebJobService(WebJobService):
             router,
             max_concurrency=self.settings.max_concurrent_expert_requests,
             progress_callback=_expert_progress_callback(progress),
+            cancel_callback=lambda: self._is_cancel_requested(job.job_id),
         ).run(case)
+        self._raise_if_cancelled(job.job_id)
 
         progress(95, "Preparing evidence-grounded report")
 

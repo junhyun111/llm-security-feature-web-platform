@@ -2,10 +2,22 @@ const API_BASE = import.meta.env.VITE_API_URL ?? ''
 
 export class ApiError extends Error {
   status: number
+  code?: string
+  traceId?: string
+  retryable: boolean
 
-  constructor(status: number, message: string) {
+  constructor(
+    status: number,
+    message: string,
+    options?: { code?: string; traceId?: string }
+  ) {
     super(message)
+    this.name = 'ApiError'
     this.status = status
+    this.code = options?.code
+    this.traceId = options?.traceId
+    this.retryable = status === 0 || status === 429 ||
+      status === 502 || status === 503 || status === 504
   }
 }
 
@@ -15,22 +27,37 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers.set('Content-Type', 'application/json')
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-    credentials: 'include'
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers,
+      credentials: 'include'
+    })
+  } catch {
+    throw new ApiError(
+      0,
+      '서버에 연결할 수 없습니다. 네트워크 연결과 서버 실행 상태를 확인해주세요.',
+      { code: 'NETWORK_ERROR' }
+    )
+  }
 
   if (!response.ok) {
-    let message = '요청을 처리하지 못했습니다.'
+    let message = `요청 실패 (HTTP ${response.status})`
+    let code: string | undefined
+    let traceId: string | undefined
     try {
-      const payload = await response.json()
-      message = payload.message || payload.detail ||
-        (Array.isArray(payload.errors) ? payload.errors.join(', ') : message)
+      const payload = await response.json() as Record<string, unknown>
+      const errors = Array.isArray(payload.errors)
+        ? payload.errors.map(String).join(', ')
+        : undefined
+      message = String(payload.detail || payload.message || errors || message)
+      code = typeof payload.code === 'string' ? payload.code : undefined
+      traceId = typeof payload.traceId === 'string' ? payload.traceId : undefined
     } catch {
       // JSON 오류 본문이 아니면 기본 메시지를 사용합니다.
     }
-    throw new ApiError(response.status, message)
+    throw new ApiError(response.status, message, { code, traceId })
   }
 
   if (response.status === 204) return undefined as T

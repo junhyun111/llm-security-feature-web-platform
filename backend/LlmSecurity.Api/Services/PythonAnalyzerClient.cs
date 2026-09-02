@@ -100,6 +100,19 @@ public class PythonAnalyzerClient
         await EnsureSuccess(response, cancellationToken);
     }
 
+    public async Task<PythonJobDto> CancelJobAsync(
+        string analyzerJobId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.PostAsync(
+            $"/api/jobs/{Uri.EscapeDataString(analyzerJobId)}/cancel",
+            null,
+            cancellationToken);
+        await EnsureSuccess(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<PythonJobDto>(
+            cancellationToken: cancellationToken))!;
+    }
+
     public async Task<string> GetAnalysisJsonAsync(
         string analyzerJobId,
         CancellationToken cancellationToken = default)

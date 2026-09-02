@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ArrowLeft,
+  CircleStop,
   Code2,
   Download,
   FileDiff,
@@ -10,15 +11,16 @@ import {
   WandSparkles,
   XCircle
 } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api } from '../api'
+import { api, ApiError } from '../api'
 import StatusBadge from '../components/StatusBadge'
 import { useSettings } from '../settings/SettingsContext'
-import type { AnalysisDetail, FindingBundle, PatchBatch } from '../types'
+import type { AnalysisDetail, AnalysisJob, AnalysisStatus, AnalysisSyncInfo, FindingBundle, PatchBatch } from '../types'
 import './AnalysisDetailPage.css'
 
 type DetailTab = 'overview' | 'code' | 'findings' | 'patch' | 'trace'
+type UiError = { message: string; traceId?: string }
 
 const SecurityWorkbench = lazy(() =>
   import('../components/workbench/SecurityWorkbench').then((module) => ({
@@ -43,38 +45,94 @@ export default function AnalysisDetailPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [activeFindingId, setActiveFindingId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<DetailTab>('code')
-  const [error, setError] = useState('')
+  const [initialLoadError, setInitialLoadError] = useState<UiError | null>(null)
+  const [pollError, setPollError] = useState<UiError | null>(null)
+  const [actionError, setActionError] = useState<UiError | null>(null)
   const [patchBusy, setPatchBusy] = useState(false)
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const consecutivePollFailures = useRef(0)
 
-  const load = useCallback(async () => {
-    if (!id) return
-    try {
-      const result = await api.get<AnalysisDetail>(`/api/analyses/${id}`)
-      setDetail(result)
-      const findings = result.analysis?.findings || []
-      setActiveFindingId((current) =>
-        current && findings.some((item) => item.finding.finding_id === current)
-          ? current
-          : findings[0]?.finding.finding_id || null
-      )
-      if (result.analysis?.patch_batch?.finding_ids) {
-        setSelected(new Set(result.analysis.patch_batch.finding_ids))
-      }
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '분석 정보를 불러오지 못했습니다.')
+  const applyDetail = useCallback((result: AnalysisDetail) => {
+    setDetail(result)
+    const findings = result.analysis?.findings || []
+    setActiveFindingId((current) =>
+      current && findings.some((item) => item.finding.finding_id === current)
+        ? current
+        : findings[0]?.finding.finding_id || null
+    )
+    if (result.analysis?.patch_batch?.finding_ids) {
+      setSelected(new Set(result.analysis.patch_batch.finding_ids))
     }
-  }, [id])
+    setPollError(syncWarning(result.sync))
+  }, [])
+
+  const refreshDetail = useCallback(async () => {
+    if (!id) return
+    const result = await api.get<AnalysisDetail>(`/api/analyses/${id}`)
+    applyDetail(result)
+    return result
+  }, [applyDetail, id])
 
   useEffect(() => {
-    load()
-  }, [load])
+    let disposed = false
+    setInitialLoadError(null)
+    refreshDetail().catch((reason) => {
+      if (!disposed) setInitialLoadError(toUiError(reason, '분석 정보를 불러오지 못했습니다.'))
+    })
+    return () => { disposed = true }
+  }, [refreshDetail])
 
   useEffect(() => {
     const status = detail?.job.status
-    if (!status || !['uploading', 'queued', 'analyzing'].includes(status)) return
-    const timer = window.setInterval(load, 1800)
-    return () => window.clearInterval(timer)
-  }, [detail?.job.status, load])
+    if (!status || !['uploading', 'queued', 'analyzing', 'cancelling'].includes(status)) return
+
+    let disposed = false
+    let timer: number | undefined
+
+    const recordPollFailure = (reason: unknown) => {
+      consecutivePollFailures.current += 1
+      if (consecutivePollFailures.current >= 3) {
+        const error = toUiError(reason, '분석 상태 갱신이 일시적으로 지연되고 있습니다.')
+        setPollError({
+          message: '분석 상태 갱신이 일시적으로 지연되고 있습니다.',
+          traceId: error.traceId
+        })
+      }
+    }
+
+    const poll = async () => {
+      try {
+        const result = await api.get<AnalysisStatus>(`/api/analyses/${id}/status`)
+        consecutivePollFailures.current = 0
+
+        if (['completed', 'partial', 'failed', 'cancelled'].includes(result.job.status)) {
+          try {
+            await refreshDetail()
+            consecutivePollFailures.current = 0
+          } catch (reason) {
+            recordPollFailure(reason)
+          }
+        } else {
+          setDetail((current) => current ? {
+            ...current,
+            job: result.job,
+            sync: result.sync
+          } : current)
+          setPollError(syncWarning(result.sync))
+        }
+      } catch (reason) {
+        recordPollFailure(reason)
+      }
+
+      if (!disposed) timer = window.setTimeout(poll, 2000)
+    }
+
+    timer = window.setTimeout(poll, 2000)
+    return () => {
+      disposed = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [detail?.job.status, id, refreshDetail])
 
   const findings = detail?.analysis?.findings ?? []
   const validated = useMemo(
@@ -94,20 +152,20 @@ export default function AnalysisDetailPage() {
   const proposePatch = async () => {
     if (!id || !selected.size) return
     if (!openRouterApiKey.trim()) {
-      setError('설정 탭에서 패치 생성에 사용할 OpenRouter API Key를 저장해 주세요.')
+      setActionError({ message: '설정 탭에서 패치 생성에 사용할 OpenRouter API Key를 저장해 주세요.' })
       return
     }
     setPatchBusy(true)
-    setError('')
+    setActionError(null)
     try {
       await api.post<PatchBatch>(`/api/analyses/${id}/patches/proposal`, {
         findingIds: Array.from(selected),
         apiKey: openRouterApiKey.trim()
       })
-      await load()
+      await refreshDetail()
       setActiveTab('patch')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '패치 생성에 실패했습니다.')
+      setActionError(toUiError(reason, '패치 생성에 실패했습니다.'))
     } finally {
       setPatchBusy(false)
     }
@@ -117,16 +175,31 @@ export default function AnalysisDetailPage() {
     const patch = detail?.analysis?.patch_batch
     if (!id || !patch) return
     setPatchBusy(true)
-    setError('')
+    setActionError(null)
     try {
       await api.post<PatchBatch>(
         `/api/analyses/${id}/patches/${encodeURIComponent(patch.patch_id)}/${action}`
       )
-      await load()
+      await refreshDetail()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '패치 처리에 실패했습니다.')
+      setActionError(toUiError(reason, '패치 처리에 실패했습니다.'))
     } finally {
       setPatchBusy(false)
+    }
+  }
+
+  const cancelAnalysis = async () => {
+    if (!id || detail?.job.status === 'cancelling') return
+    if (!window.confirm('진행 중인 분석을 중단할까요? 이미 OpenRouter에 전송된 요청은 현재 응답 또는 timeout까지 처리될 수 있습니다.')) return
+    setCancelBusy(true)
+    setActionError(null)
+    try {
+      const job = await api.post<AnalysisJob>(`/api/analyses/${id}/cancel`)
+      setDetail((current) => current ? { ...current, job } : current)
+    } catch (reason) {
+      setActionError(toUiError(reason, '분석 중단을 요청하지 못했습니다.'))
+    } finally {
+      setCancelBusy(false)
     }
   }
 
@@ -134,12 +207,15 @@ export default function AnalysisDetailPage() {
     return (
       <div className="page">
         <Link className="back-link" to="/analyses"><ArrowLeft size={16} /> 분석 이력</Link>
-        {error ? <div className="error-box">{error}</div> : <div className="loader" />}
+        {initialLoadError
+          ? <ErrorMessage error={initialLoadError} />
+          : <div className="loader" />}
       </div>
     )
   }
 
   const { job, analysis } = detail
+  const analysisActive = ['uploading', 'queued', 'analyzing', 'cancelling'].includes(job.status)
   const patch = analysis?.patch_batch
   const patchComposer = !patch ? (
     <div className="patch-generation-actions">
@@ -173,6 +249,11 @@ export default function AnalysisDetailPage() {
         </div>
         <div className="detail-actions">
           <StatusBadge status={job.status} />
+          {analysisActive && (
+            <button className="danger-button compact" disabled={cancelBusy || job.status === 'cancelling'} onClick={cancelAnalysis}>
+              <CircleStop size={15} /> {job.status === 'cancelling' ? '중단 요청됨' : cancelBusy ? '요청 중…' : '분석 중단'}
+            </button>
+          )}
           {['completed', 'partial'].includes(job.status) && (
             <a className="secondary-button compact" href={api.downloadUrl(`/api/analyses/${job.id}/download`)}>
               <Download size={15} /> 프로젝트 다운로드
@@ -181,12 +262,23 @@ export default function AnalysisDetailPage() {
         </div>
       </header>
 
-      {error && <div className="error-box">{error}</div>}
+      {actionError && <ErrorMessage error={actionError} />}
 
-      {['uploading', 'queued', 'analyzing'].includes(job.status) && (
+      {pollError && (
+        <div className="poll-warning" role="status">
+          <AlertTriangle size={16} />
+          <div>
+            <strong>{pollError.message}</strong>
+            <span>마지막 정상 상태: {job.progress}% · {job.message || job.status}</span>
+            {pollError.traceId && <small>오류 ID: {pollError.traceId}</small>}
+          </div>
+        </div>
+      )}
+
+      {analysisActive && (
         <section className="panel progress-panel">
           <div className="panel-head">
-            <div><h2>{job.message || '분석을 진행하고 있습니다.'}</h2><p>완료될 때까지 이 화면이 자동으로 갱신됩니다.</p></div>
+            <div><h2>{job.message || '분석을 진행하고 있습니다.'}</h2><p>{job.status === 'cancelling' ? '현재 실행 중인 요청을 정리하고 있습니다.' : '완료될 때까지 이 화면이 자동으로 갱신됩니다.'}</p></div>
             <strong>{job.progress}%</strong>
           </div>
           <div className="progress-track"><div className="progress-fill" style={{ width: `${job.progress}%` }} /></div>
@@ -202,6 +294,12 @@ export default function AnalysisDetailPage() {
       {job.status === 'partial' && (
         <section className="panel warning-panel">
           <AlertTriangle /><div><h2>일부 분석만 완료되었습니다.</h2><p>{job.errorMessage || job.message}</p></div>
+        </section>
+      )}
+
+      {job.status === 'cancelled' && (
+        <section className="panel warning-panel">
+          <CircleStop /><div><h2>분석을 중단했습니다.</h2><p>완료된 일부 요청 결과는 저장하지 않았습니다. 다시 분석하려면 새 분석을 시작하세요.</p></div>
         </section>
       )}
 
@@ -268,6 +366,39 @@ export default function AnalysisDetailPage() {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+function syncWarning(sync?: AnalysisSyncInfo | null): UiError | null {
+  if (!sync?.warning) return null
+  return {
+    message: sync.warning,
+    traceId: sync.traceId || undefined
+  }
+}
+
+function toUiError(reason: unknown, fallback: string): UiError {
+  if (reason instanceof ApiError) {
+    const message = reason.status === 401
+      ? '로그인이 만료되었습니다. 다시 로그인해주세요.'
+      : reason.status === 403
+        ? '이 작업을 수행할 권한이 없습니다.'
+        : reason.status === 404
+          ? '분석 기록을 찾을 수 없습니다.'
+          : reason.message || fallback
+    return { message, traceId: reason.traceId }
+  }
+  return {
+    message: reason instanceof Error ? reason.message : fallback
+  }
+}
+
+function ErrorMessage({ error }: { error: UiError }) {
+  return (
+    <div className="error-box" role="alert">
+      <div>{error.message}</div>
+      {error.traceId && <small>오류 ID: {error.traceId}</small>}
     </div>
   )
 }

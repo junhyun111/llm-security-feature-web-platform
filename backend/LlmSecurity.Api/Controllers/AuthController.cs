@@ -8,7 +8,7 @@ namespace LlmSecurity.Api.Controllers;
 
 [ApiController]
 [Route("api/auth")]
-public class AuthController : ControllerBase
+public class AuthController : ApiControllerBase
 {
     private readonly UserManager<AppUser> _userManager;
     private readonly SignInManager<AppUser> _signInManager;
@@ -28,7 +28,7 @@ public class AuthController : ControllerBase
         var displayName = request.DisplayName.Trim();
 
         if (string.IsNullOrWhiteSpace(displayName))
-            return BadRequest(new { message = "이름을 입력해주세요." });
+            return ApiProblem(400, "이름을 입력해주세요.", "DISPLAY_NAME_REQUIRED");
 
         var user = new AppUser
         {
@@ -41,11 +41,11 @@ public class AuthController : ControllerBase
 
         if (!result.Succeeded)
         {
-            return BadRequest(new
-            {
-                message = "회원가입에 실패했습니다.",
-                errors = result.Errors.Select(x => x.Description)
-            });
+            return ApiProblem(
+                400,
+                "회원가입에 실패했습니다.",
+                "REGISTRATION_FAILED",
+                result.Errors.Select(x => x.Description));
         }
 
         await _signInManager.SignInAsync(user, isPersistent: false);
@@ -63,7 +63,7 @@ public class AuthController : ControllerBase
         var user = await _userManager.FindByEmailAsync(email);
 
         if (user is null)
-            return Unauthorized(new { message = "이메일 또는 비밀번호가 올바르지 않습니다." });
+            return ApiProblem(401, "이메일 또는 비밀번호가 올바르지 않습니다.", "LOGIN_FAILED");
 
         var result = await _signInManager.PasswordSignInAsync(
             user,
@@ -72,7 +72,7 @@ public class AuthController : ControllerBase
             lockoutOnFailure: true);
 
         if (!result.Succeeded)
-            return Unauthorized(new { message = "이메일 또는 비밀번호가 올바르지 않습니다." });
+            return ApiProblem(401, "이메일 또는 비밀번호가 올바르지 않습니다.", "LOGIN_FAILED");
 
         return Ok(new UserResponse(
             user.Id,
@@ -94,7 +94,7 @@ public class AuthController : ControllerBase
     {
         var user = await _userManager.GetUserAsync(User);
         if (user is null)
-            return Unauthorized();
+            return ApiProblem(401, "로그인이 만료되었습니다.", "AUTHENTICATION_REQUIRED");
 
         return Ok(new UserResponse(
             user.Id,
@@ -108,12 +108,15 @@ public class AuthController : ControllerBase
     {
         var user = await _userManager.GetUserAsync(User);
         if (user is null)
-            return Unauthorized();
+            return ApiProblem(401, "로그인이 만료되었습니다.", "AUTHENTICATION_REQUIRED");
 
         var email = request.Email.Trim().ToLowerInvariant();
         var displayName = request.DisplayName.Trim();
         if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(displayName))
-            return BadRequest(new { message = "로그인 이메일(ID)과 표시 이름을 입력해주세요." });
+            return ApiProblem(
+                400,
+                "로그인 이메일(ID)과 표시 이름을 입력해주세요.",
+                "PROFILE_INPUT_REQUIRED");
 
         user.Email = email;
         user.NormalizedEmail = _userManager.NormalizeEmail(email);
@@ -123,11 +126,11 @@ public class AuthController : ControllerBase
         var result = await _userManager.UpdateAsync(user);
         if (!result.Succeeded)
         {
-            return BadRequest(new
-            {
-                message = "계정 정보를 저장하지 못했습니다.",
-                errors = result.Errors.Select(x => x.Description)
-            });
+            return ApiProblem(
+                400,
+                "계정 정보를 저장하지 못했습니다.",
+                "PROFILE_UPDATE_FAILED",
+                result.Errors.Select(x => x.Description));
         }
 
         return Ok(new UserResponse(user.Id, user.Email ?? "", user.DisplayName));
@@ -139,7 +142,7 @@ public class AuthController : ControllerBase
     {
         var user = await _userManager.GetUserAsync(User);
         if (user is null)
-            return Unauthorized();
+            return ApiProblem(401, "로그인이 만료되었습니다.", "AUTHENTICATION_REQUIRED");
 
         var result = await _userManager.ChangePasswordAsync(
             user,
@@ -147,11 +150,11 @@ public class AuthController : ControllerBase
             request.NewPassword);
         if (!result.Succeeded)
         {
-            return BadRequest(new
-            {
-                message = "비밀번호를 변경하지 못했습니다.",
-                errors = result.Errors.Select(x => x.Description)
-            });
+            return ApiProblem(
+                400,
+                "비밀번호를 변경하지 못했습니다.",
+                "PASSWORD_CHANGE_FAILED",
+                result.Errors.Select(x => x.Description));
         }
 
         await _signInManager.RefreshSignInAsync(user);

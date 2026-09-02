@@ -8,7 +8,7 @@ namespace LlmSecurity.Api.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/openrouter")]
-public sealed class OpenRouterController(OpenRouterCatalogClient catalog) : ControllerBase
+public sealed class OpenRouterController(OpenRouterCatalogClient catalog) : ApiControllerBase
 {
     [HttpPost("models")]
     public async Task<IActionResult> Models(
@@ -21,17 +21,21 @@ public sealed class OpenRouterController(OpenRouterCatalogClient catalog) : Cont
         }
         catch (ArgumentException error)
         {
-            return BadRequest(new { message = error.Message });
+            return ApiProblem(400, error.Message, "OPENROUTER_REQUEST_INVALID");
         }
         catch (OpenRouterCatalogException error)
         {
-            return StatusCode((int)error.StatusCode, new { message = error.Message });
+            return ApiProblem(
+                (int)error.StatusCode,
+                error.Message,
+                "OPENROUTER_REQUEST_FAILED");
         }
         catch (HttpRequestException)
         {
-            return StatusCode(
-                StatusCodes.Status503ServiceUnavailable,
-                new { message = "OpenRouter 모델 목록을 불러올 수 없습니다." });
+            return ApiProblem(
+                503,
+                "OpenRouter 모델 목록을 불러올 수 없습니다.",
+                "OPENROUTER_UNAVAILABLE");
         }
     }
 }

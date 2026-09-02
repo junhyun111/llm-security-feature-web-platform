@@ -47,8 +47,8 @@ export default function JobTable({
                   <button
                     className="table-delete"
                     type="button"
-                    disabled={['uploading', 'queued', 'analyzing'].includes(job.status)}
-                    title={['uploading', 'queued', 'analyzing'].includes(job.status) ? '진행 중인 분석은 삭제할 수 없습니다.' : '분석 이력 삭제'}
+                    disabled={['uploading', 'queued', 'analyzing', 'cancelling'].includes(job.status)}
+                    title={['uploading', 'queued', 'analyzing', 'cancelling'].includes(job.status) ? '진행 중인 분석은 삭제할 수 없습니다.' : '분석 이력 삭제'}
                     aria-label={`${job.projectName} 분석 이력 삭제`}
                     onClick={(event) => { event.stopPropagation(); onDelete(job) }}
                   ><Trash2 size={15} /></button>

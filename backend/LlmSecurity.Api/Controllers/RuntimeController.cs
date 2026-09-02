@@ -7,7 +7,7 @@ namespace LlmSecurity.Api.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/runtime")]
-public class RuntimeController : ControllerBase
+public class RuntimeController : ApiControllerBase
 {
     private readonly PythonAnalyzerClient _analyzer;
 
@@ -26,13 +26,14 @@ public class RuntimeController : ControllerBase
         }
         catch (AnalyzerApiException ex)
         {
-            return StatusCode((int)ex.StatusCode, new { message = ex.Message });
+            return ApiProblem((int)ex.StatusCode, ex.Message, "ANALYZER_REQUEST_FAILED");
         }
         catch (HttpRequestException)
         {
-            return StatusCode(
-                StatusCodes.Status503ServiceUnavailable,
-                new { message = "Python 분석 서버에 연결할 수 없습니다." });
+            return ApiProblem(
+                503,
+                "Python 분석 서버에 연결할 수 없습니다.",
+                "RUNTIME_UNAVAILABLE");
         }
     }
 }

@@ -59,6 +59,14 @@ class RuntimeJobDeletionTest(unittest.TestCase):
 
         self.assertTrue(directory.exists())
 
+    def test_active_job_records_a_cancellation_request(self) -> None:
+        self.write_job(record(JobStatus.ANALYZING))
+
+        updated = self.service.cancel_job("a" * 32)
+
+        self.assertEqual(JobStatus.CANCELLING, updated.status)
+        self.assertTrue(self.service._is_cancel_requested("a" * 32))
+
 
 if __name__ == "__main__":
     unittest.main()

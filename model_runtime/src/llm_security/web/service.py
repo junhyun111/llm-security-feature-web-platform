@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from ..config import AppConfig
 from ..datasets import _candidate_from_raw
-from ..experts import ExpertProgress
+from ..experts import AnalysisCancelled, ExpertProgress
 from ..factory import build_openrouter_client, build_parallel_web_pipeline
 from ..models import (
     ExpertFamily,
@@ -64,9 +64,11 @@ class JobStatus(str, Enum):
     UPLOADING = "uploading"
     QUEUED = "queued"
     ANALYZING = "analyzing"
+    CANCELLING = "cancelling"
     COMPLETED = "completed"
     PARTIAL = "partial"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass(slots=True)
@@ -197,6 +199,7 @@ class WebJobService:
             max_workers=self.settings.worker_count,
             thread_name_prefix="llm-security-web",
         )
+        self._cancel_events: dict[str, threading.Event] = {}
         self._analysis_callback = analysis_callback or self._analyze_project
         self._recover_interrupted_jobs()
 
@@ -254,6 +257,8 @@ class WebJobService:
         except Exception:
             shutil.rmtree(job_directory, ignore_errors=True)
             raise
+        with self._lock:
+            self._cancel_events[record.job_id] = threading.Event()
         self._executor.submit(self._run_analysis, record.job_id)
         return record
 
@@ -273,6 +278,25 @@ class WebJobService:
                 raise KeyError(job_id)
             return _job_from_raw(json.loads(path.read_text(encoding="utf-8")))
 
+    def cancel_job(self, job_id: str) -> JobRecord:
+        with self._lock:
+            record = self.get_job(job_id)
+            if record.status not in {
+                JobStatus.UPLOADING,
+                JobStatus.QUEUED,
+                JobStatus.ANALYZING,
+                JobStatus.CANCELLING,
+            }:
+                raise ValueError("Only an active analysis can be cancelled")
+            self._cancel_events.setdefault(job_id, threading.Event()).set()
+            if record.status != JobStatus.CANCELLING:
+                self._update_job(
+                    record,
+                    status=JobStatus.CANCELLING,
+                    message="Cancellation requested; stopping pending Expert tasks",
+                )
+            return record
+
     def delete_job(self, job_id: str) -> None:
         """Remove a completed job and every runtime-owned file beneath it."""
 
@@ -282,10 +306,12 @@ class WebJobService:
                 JobStatus.UPLOADING,
                 JobStatus.QUEUED,
                 JobStatus.ANALYZING,
+                JobStatus.CANCELLING,
             }:
                 raise RuntimeError("An active analysis cannot be deleted")
             job_directory = self._job_dir(job_id)
             shutil.rmtree(job_directory)
+            self._cancel_events.pop(job_id, None)
 
     def get_analysis(self, job_id: str) -> dict:
         record = self.get_job(job_id)
@@ -709,16 +735,19 @@ class WebJobService:
 
     def _run_analysis(self, job_id: str) -> None:
         try:
+            self._raise_if_cancelled(job_id)
             record = self.get_job(job_id)
             self._update_job(record, status=JobStatus.ANALYZING, progress=10, message="Starting analysis")
 
             def progress(value: int, message: str) -> None:
+                self._raise_if_cancelled(job_id)
                 current = self.get_job(job_id)
                 self._update_job(current, progress=value, message=message)
 
             analysis = self._analysis_callback(
                 self._job_dir(job_id) / "input", record, progress
             )
+            self._raise_if_cancelled(job_id)
             _write_json_atomic(self._job_dir(job_id) / "analysis.json", analysis)
             completed = self.get_job(job_id)
             summary = analysis.get("summary", {})
@@ -738,6 +767,18 @@ class WebJobService:
                 message=outcome_message,
                 error=outcome_error,
             )
+        except AnalysisCancelled:
+            try:
+                cancelled = self.get_job(job_id)
+                self._update_job(
+                    cancelled,
+                    status=JobStatus.CANCELLED,
+                    progress=100,
+                    message="Analysis cancelled by user",
+                    error=None,
+                )
+            except Exception:
+                pass
         except Exception as error:  # background boundary must persist the failure
             try:
                 failed = self.get_job(job_id)
@@ -765,14 +806,17 @@ class WebJobService:
         config.analysis.backend = "semantic"
         config.candidate_gate.enabled = self.settings.candidate_gate_enabled
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
+        self._raise_if_cancelled(job.job_id)
         progress(20, "Loading C/C++ source files")
         source_files = load_project_sources(
             input_directory,
             max_file_bytes=self.settings.max_source_file_bytes,
             max_total_bytes=self.settings.max_source_total_bytes,
         )
+        self._raise_if_cancelled(job.job_id)
         progress(30, "Loading Router and static analyzer")
         router = load_router_artifact(self.settings.router_artifact)
+        self._raise_if_cancelled(job.job_id)
         case = ProjectCase(
             case_id=f"web-{job.job_id}",
             project_id=job.project_name,
@@ -786,7 +830,9 @@ class WebJobService:
             router,
             max_concurrency=self.settings.max_concurrent_expert_requests,
             progress_callback=_expert_progress_callback(progress),
+            cancel_callback=lambda: self._is_cancel_requested(job.job_id),
         ).run(case)
+        self._raise_if_cancelled(job.job_id)
         progress(95, "Preparing evidence-grounded report")
         candidates = {item.candidate_id: item for item in result.candidates}
         validations = {item.finding_id: item for item in result.validations}
@@ -859,6 +905,15 @@ class WebJobService:
 
     def _recover_interrupted_jobs(self) -> None:
         for record in self.list_jobs():
+            if record.status == JobStatus.CANCELLING:
+                self._update_job(
+                    record,
+                    status=JobStatus.CANCELLED,
+                    progress=100,
+                    message="Analysis cancelled by user",
+                    error=None,
+                )
+                continue
             if record.status in {
                 JobStatus.UPLOADING,
                 JobStatus.QUEUED,
@@ -871,6 +926,15 @@ class WebJobService:
                     message="Analysis interrupted by server restart",
                     error="Restart the upload to run analysis again.",
                 )
+
+    def _is_cancel_requested(self, job_id: str) -> bool:
+        with self._lock:
+            event = self._cancel_events.get(job_id)
+            return bool(event and event.is_set())
+
+    def _raise_if_cancelled(self, job_id: str) -> None:
+        if self._is_cancel_requested(job_id):
+            raise AnalysisCancelled("Analysis cancellation requested")
 
     def _write_job(self, record: JobRecord) -> None:
         with self._lock:
