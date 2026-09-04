@@ -16,5 +16,5 @@
 .icon-button { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); width: 32px; height: 32px; display: grid; place-items: center; color: var(--muted); background: transparent; border-radius: 6px; cursor: pointer; }
 .icon-button:hover { color: var(--text); background: var(--surface-2); }
 .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.settings-notice { margin: -14px 0 18px; padding: 11px 13px; color: var(--success); background: rgba(63, 185, 80, .08); border: 1px solid rgba(63, 185, 80, .22); border-radius: 9px; font-size: 11px; }
+.settings-notice { margin: -14px 0 18px; padding: 11px 13px; color: var(--success); background: rgba(248, 81, 73, .08); border: 1px solid rgba(248, 81, 73, .22); border-radius: 9px; font-size: 11px; }
 @media (max-width: 700px) { .settings-grid { grid-template-columns: 1fr; } .settings-card-wide { grid-column: auto; } .settings-page { width: min(100% - 30px, 920px); } }

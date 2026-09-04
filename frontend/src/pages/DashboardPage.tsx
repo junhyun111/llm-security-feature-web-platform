@@ -1,13 +1,24 @@
-import { ArrowRight, Clock3, FolderOpen, Plus, ShieldAlert, Sparkles } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { ArrowRight, CircleAlert, Clock3, FolderKanban, Plus, ShieldCheck } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
-import StatusBadge from '../components/StatusBadge'
 import { useAuth } from '../auth/AuthContext'
+import StatusBadge from '../components/StatusBadge'
 import type { AnalysisJob, Dashboard } from '../types'
 import './DashboardPage.css'
 
 const emptyDashboard: Dashboard = { totalScans: 0, completedScans: 0, totalFindings: 0, validatedFindings: 0, approvedPatches: 0, recentJobs: [] }
+
+function formatDate(date: string) {
+  return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(date))
+}
+
+function greeting() {
+  const hour = new Date().getHours()
+  if (hour < 12) return 'Good morning'
+  if (hour < 18) return 'Good afternoon'
+  return 'Good evening'
+}
 
 export default function DashboardPage() {
   const { user } = useAuth()
@@ -16,25 +27,44 @@ export default function DashboardPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    api.get<Dashboard>('/api/dashboard').then(setData).catch((reason) => setError(reason instanceof Error ? reason.message : 'Library를 불러오지 못했습니다.')).finally(() => setLoading(false))
+    api.get<Dashboard>('/api/dashboard').then(setData).catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to load your workspace.')).finally(() => setLoading(false))
   }, [])
 
-  const attentionJobs = useMemo(() => data.recentJobs.filter((job) => job.findingCount > job.validatedFindingCount || ['failed', 'partial'].includes(job.status)).slice(0, 3), [data.recentJobs])
+  const resumeJob = useMemo(() => data.recentJobs.find((job) => !['completed', 'failed', 'cancelled'].includes(job.status)) || data.recentJobs[0], [data.recentJobs])
+  const openFindings = Math.max(0, data.totalFindings - data.validatedFindings)
 
-  return <div className="page library-page">
-    <header className="library-header"><div><span className="eyebrow">YOUR LIBRARY</span><h1>안녕하세요, {user?.displayName || 'there'}</h1><p>분석 프로젝트를 관리하고 다음 보안 작업을 시작하세요.</p></div><Link className="primary-button" to="/analyses/new"><Plus size={17} /> New analysis</Link></header>
+  return <div className="workspace-page home-page">
+    <header className="workspace-page-header">
+      <div><span className="eyebrow">SECURITY WORKSPACE</span><h1>{greeting()}, {user?.displayName || 'there'}.</h1><p>Pick up where you left off or start a new code security analysis.</p></div>
+      <Link className="primary-button" to="/analyses/new"><Plus size={17} /> New analysis</Link>
+    </header>
     {error && <div className="error-box" role="alert">{error}</div>}
 
-    {!loading && data.recentJobs.length === 0 ? <section className="library-empty"><div className="library-empty-icon"><Sparkles size={24} /></div><span className="eyebrow">A CLEAN START</span><h2>첫 번째 프로젝트를 분석해보세요.</h2><p>코드를 업로드하면 취약점과 검증 결과를 하나의 리뷰 흐름으로 확인할 수 있습니다.</p><Link className="primary-button compact" to="/analyses/new">Start an analysis <ArrowRight size={14} /></Link></section> : <>
-      <section className="library-hero-card"><div><span className="eyebrow">SECURITY LIBRARY</span><h2>분석 결과를 한 곳에서<br /><em>검토하고 관리하세요.</em></h2><p>{data.totalScans ? `지금까지 ${data.totalScans.toLocaleString()}개의 분석 프로젝트가 라이브러리에 있습니다.` : '프로젝트별 분석 결과와 패치 작업을 관리하세요.'}</p></div><div className="library-hero-orbit"><ShieldAlert size={25} /><span>{data.validatedFindings.toLocaleString()} validated findings</span></div></section>
-      {attentionJobs.length > 0 && <section className="library-section"><div className="library-section-heading"><div><span className="eyebrow">NEEDS ATTENTION</span><h2>다음으로 검토할 프로젝트</h2></div><Link to="/analyses">View all <ArrowRight size={14} /></Link></div><div className="attention-grid">{attentionJobs.map((job) => <ProjectCard key={job.id} job={job} attention />)}</div></section>}
-      <section className="library-section"><div className="library-section-heading"><div><span className="eyebrow">ALL PROJECTS</span><h2>최근 프로젝트</h2></div><Link to="/analyses">View library <ArrowRight size={14} /></Link></div>{loading ? <div className="library-project-skeleton" /> : <div className="project-card-grid">{data.recentJobs.slice(0, 6).map((job) => <ProjectCard key={job.id} job={job} />)}</div>}</section>
-      <section className="library-activity"><Clock3 size={17} /><div><strong>검토가 끝나면 패치를 생성하세요.</strong><span>Finding 상세에서 Generate patch를 누르면 안전한 Patch workspace로 이동합니다.</span></div><Link to={data.recentJobs[0] ? `/analyses/${data.recentJobs[0].id}?view=analysis&tab=findings` : '/analyses'}>Open findings <ArrowRight size={14} /></Link></section>
+    {!loading && data.recentJobs.length === 0 ? <section className="workspace-empty">
+      <span className="workspace-empty-icon"><ShieldCheck size={27} /></span><span className="eyebrow">READY WHEN YOU ARE</span><h2>Start your first security analysis.</h2><p>Upload a C or C++ project to identify vulnerabilities, review evidence, and generate a verified patch.</p><Link className="primary-button" to="/analyses/new">Start an analysis <ArrowRight size={16} /></Link>
+    </section> : <>
+      <section className="overview-grid" aria-label="Security overview">
+        <OverviewStat icon={<FolderKanban size={18} />} label="All projects" value={data.totalScans} />
+        <OverviewStat icon={<CircleAlert size={18} />} label="Open findings" value={openFindings} tone={openFindings ? 'warning' : 'success'} />
+        <OverviewStat icon={<ShieldCheck size={18} />} label="Validated findings" value={data.validatedFindings} tone="success" />
+        <OverviewStat icon={<Clock3 size={18} />} label="Analyses completed" value={data.completedScans} />
+      </section>
+      {resumeJob && <section className="resume-panel">
+        <div className="resume-panel-icon"><Clock3 size={20} /></div><div className="resume-panel-main"><span className="eyebrow">CONTINUE ANALYSIS</span><h2>{resumeJob.projectName}</h2><p>{resumeJob.fileCount.toLocaleString()} files · Last updated {formatDate(resumeJob.updatedAt || resumeJob.createdAt)}</p></div><div className="resume-panel-status"><StatusBadge status={resumeJob.status} /><span>{resumeJob.findingCount} findings</span></div><Link className="secondary-button compact" to={`/analyses/${resumeJob.id}?view=analysis&tab=findings`}>Resume <ArrowRight size={15} /></Link>
+      </section>}
+      <section className="recent-section">
+        <div className="section-title-row"><div><span className="eyebrow">RECENT PROJECTS</span><h2>Your latest security work</h2></div><Link to="/analyses">View all projects <ArrowRight size={15} /></Link></div>
+        {loading ? <div className="workspace-skeleton" /> : <div className="recent-project-list">{data.recentJobs.slice(0, 5).map((job) => <RecentProject key={job.id} job={job} />)}</div>}
+      </section>
     </>}
   </div>
 }
 
-function ProjectCard({ job, attention = false }: { job: AnalysisJob; attention?: boolean }) {
-  const unresolved = Math.max(0, job.findingCount - job.validatedFindingCount)
-  return <Link className={`project-card ${attention ? 'attention' : ''}`} to={`/analyses/${job.id}?view=analysis&tab=findings`}><div className="project-card-top"><span className="project-icon"><FolderOpen size={17} /></span><StatusBadge status={job.status} /></div><h3>{job.projectName}</h3><p>{job.fileCount.toLocaleString()} files <span>·</span> {new Date(job.updatedAt || job.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p><div className="project-card-bottom"><span>{job.findingCount} findings</span>{unresolved > 0 ? <strong>{unresolved} to review</strong> : <strong className="all-clear">All validated</strong>}</div></Link>
+function OverviewStat({ icon, label, value, tone = 'blue' }: { icon: ReactNode; label: string; value: number; tone?: 'blue' | 'warning' | 'success' }) {
+  return <article className={`overview-stat ${tone}`}><span>{icon}</span><strong>{value.toLocaleString()}</strong><small>{label}</small></article>
+}
+
+function RecentProject({ job }: { job: AnalysisJob }) {
+  const open = Math.max(0, job.findingCount - job.validatedFindingCount)
+  return <Link className="recent-project-row" to={`/analyses/${job.id}?view=analysis&tab=findings`}><span className="recent-project-icon"><FolderKanban size={17} /></span><span className="recent-project-name"><strong>{job.projectName}</strong><small>{job.fileCount.toLocaleString()} files · Updated {formatDate(job.updatedAt || job.createdAt)}</small></span><StatusBadge status={job.status} /><span className={open ? 'finding-count has-open' : 'finding-count'}>{open ? `${open} to review` : 'All clear'}</span><ArrowRight className="recent-project-arrow" size={17} /></Link>
 }

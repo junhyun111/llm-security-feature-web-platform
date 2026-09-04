@@ -7,20 +7,25 @@ import {
   Sparkles,
   WandSparkles
 } from 'lucide-react'
-import { Link, Navigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import './LandingPage.css'
 
 export default function LandingPage() {
-  const { user, loading } = useAuth()
-  if (!loading && user) return <Navigate to="/library" replace />
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+  const onLogout = async () => {
+    await logout()
+    navigate('/')
+  }
 
   return (
     <div className="landing-page">
       <header className="landing-nav">
         <Link to="/" className="landing-brand"><span className="landing-brand-mark"><ShieldCheck size={19} /></span><strong>LLM Security</strong></Link>
-        <nav><a href="#how-it-works">How it works</a><a href="#capabilities">Capabilities</a></nav>
-        <div className="landing-nav-actions"><Link className="landing-login" to="/login">Log in</Link><Link className="primary-button compact" to="/register">Get started <ArrowRight size={14} /></Link></div>
+        <nav><a href="#how-it-works">How it works</a><a href="#capabilities">Capabilities</a><Link to="/analyses">Library</Link></nav>
+        <div className="landing-nav-actions">{user ? <button className="landing-login" onClick={onLogout}>Log out</button> : <Link className="landing-login" to="/login">Log in</Link>}{!user && <Link className="primary-button compact" to="/register">Get started <ArrowRight size={14} /></Link>}</div>
       </header>
 
       <main>

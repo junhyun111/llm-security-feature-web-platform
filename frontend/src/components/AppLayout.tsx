@@ -1,19 +1,21 @@
 import {
   ChevronDown,
-  LayoutDashboard,
+  FolderKanban,
+  Home,
   LogOut,
-  ScanSearch,
+  Plus,
   Settings,
   ShieldCheck
 } from 'lucide-react'
 import { useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 
 export default function AppLayout() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const userName = user?.displayName || user?.email || 'User'
 
   const onLogout = async () => {
     await logout()
@@ -22,33 +24,29 @@ export default function AppLayout() {
 
   return (
     <div className="app-shell">
-      <header className="top-navigation">
-        <div className="brand">
-          <div className="brand-mark"><ShieldCheck size={21} /></div>
-          <div><strong>LLM Security</strong><span>Code Review Platform</span></div>
-        </div>
+      <aside className="workspace-sidebar">
+        <Link className="workspace-brand" to="/" aria-label="LLM Security product home">
+          <span className="brand-mark"><ShieldCheck size={20} /></span>
+          <strong>LLM Security</strong>
+        </Link>
 
-        <nav className="nav-list" aria-label="Main navigation">
-          <NavLink to="/library" end><LayoutDashboard size={16} /> Library</NavLink>
-          <NavLink to="/analyses/new"><ScanSearch size={16} /> New Scan</NavLink>
-          <NavLink to="/settings"><Settings size={16} /> Settings</NavLink>
+        <nav className="workspace-nav" aria-label="Workspace navigation">
+          <span className="workspace-nav-label">WORKSPACE</span>
+          <NavLink to="/home"><Home size={17} /> Home</NavLink>
+          <NavLink to="/analyses" end><FolderKanban size={17} /> All projects</NavLink>
+          <Link className="new-analysis-nav" to="/analyses/new"><Plus size={17} /> New analysis</Link>
         </nav>
 
-        <div className="top-navigation-user">
-          <button className="user-menu-trigger" onClick={() => setUserMenuOpen((open) => !open)} aria-expanded={userMenuOpen}>
-            <div className="avatar">{(user?.displayName || user?.email || '?')[0].toUpperCase()}</div>
-            <span>{user?.displayName || user?.email}</span><ChevronDown size={14} />
+        <div className="workspace-sidebar-bottom">
+          <NavLink className="workspace-settings" to="/settings"><Settings size={17} /> Settings</NavLink>
+          <button className="workspace-user" onClick={() => setUserMenuOpen((open) => !open)} aria-expanded={userMenuOpen}>
+            <span className="avatar">{userName[0].toUpperCase()}</span>
+            <span className="workspace-user-copy"><strong>{userName}</strong><small>{user?.email}</small></span>
+            <ChevronDown size={15} />
           </button>
-          {userMenuOpen && (
-            <div className="user-dropdown">
-              <strong>{user?.displayName || 'User'}</strong>
-              <span>{user?.email}</span>
-              <button onClick={onLogout}><LogOut size={15} /> 로그아웃</button>
-            </div>
-          )}
+          {userMenuOpen && <div className="workspace-user-menu"><button onClick={onLogout}><LogOut size={15} /> Log out</button></div>}
         </div>
-      </header>
-
+      </aside>
       <main className="main-area"><Outlet /></main>
     </div>
   )

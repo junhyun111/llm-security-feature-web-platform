@@ -240,7 +240,7 @@
 
 .analysis-key-status.configured {
   color: var(--success);
-  border-color: rgba(63, 185, 80, .32);
+  border-color: rgba(248, 81, 73, .32);
 }
 
 .analysis-key-status a { color: var(--accent); font-weight: 700; white-space: nowrap; }

@@ -505,7 +505,7 @@
   text-align: right;
 }
 
-.verdict-validated { color: #3fb950; }
+.verdict-validated { color: #f85149; }
 .verdict-rejected { color: #f85149; }
 .verdict-uncertain { color: #d29922; }
 
@@ -698,7 +698,7 @@
   display: block;
   margin-bottom: 8px;
   border-radius: 50%;
-  background: #3fb950;
+  background: #f85149;
 }
 
 .trace-step span,
@@ -963,7 +963,7 @@
   overflow-wrap: anywhere;
 }
 
-.validation-checks span.passed { color: #3fb950; }
+.validation-checks span.passed { color: #f85149; }
 .validation-checks span.failed { color: #f85149; }
 .validation-checks span.unknown { color: #d29922; }
 

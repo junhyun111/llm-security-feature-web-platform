@@ -19,7 +19,8 @@ export default function App() {
 
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
-          <Route path="/library" element={<DashboardPage />} />
+          <Route path="/home" element={<DashboardPage />} />
+          <Route path="/library" element={<Navigate to="/analyses" replace />} />
           <Route path="/analyses" element={<HistoryPage />} />
           <Route path="/analyses/new" element={<NewAnalysisPage />} />
           <Route path="/analyses/:id" element={<AnalysisDetailPage />} />

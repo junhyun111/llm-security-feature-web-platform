@@ -10,6 +10,7 @@ import {
   GitBranch,
   Search,
   ShieldCheck,
+  X,
   XCircle
 } from 'lucide-react'
 import {
@@ -838,7 +839,7 @@ function TraceStep({ title, value }: { title: string; value: string }) {
 }
 
 function VerdictIcon({ verdict }: { verdict: string }) {
-  if (verdict === 'validated') return <CheckCircle2 className="verdict-validated" size={14} />
+  if (verdict === 'validated') return <X className="verdict-validated" size={16} strokeWidth={3} />
   if (verdict === 'rejected') return <XCircle className="verdict-rejected" size={14} />
   return <AlertTriangle className="verdict-uncertain" size={14} />
 }

@@ -11,7 +11,7 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  if (user) return <Navigate to="/library" replace />
+  if (user) return <Navigate to="/home" replace />
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -19,7 +19,7 @@ export default function LoginPage() {
     setBusy(true)
     try {
       await login(email, password)
-      navigate('/library')
+      navigate('/home')
     } catch (e) {
       setError(e instanceof Error ? e.message : '로그인에 실패했습니다.')
     } finally {
