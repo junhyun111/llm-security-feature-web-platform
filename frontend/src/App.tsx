@@ -2,10 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import AppLayout from './components/AppLayout'
 import ProtectedRoute from './components/ProtectedRoute'
 import AnalysisDetailPage from './pages/AnalysisDetailPage'
-import DashboardPage from './pages/DashboardPage'
 import HistoryPage from './pages/HistoryPage'
 import LoginPage from './pages/LoginPage'
-import NewAnalysisPage from './pages/NewAnalysisPage'
 import RegisterPage from './pages/RegisterPage'
 import SettingsPage from './pages/SettingsPage'
 import LandingPage from './pages/LandingPage'
@@ -19,10 +17,10 @@ export default function App() {
 
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
-          <Route path="/home" element={<DashboardPage />} />
-          <Route path="/library" element={<Navigate to="/analyses" replace />} />
+          <Route path="/home" element={<Navigate to="/analyses" replace />} />
+          <Route path="/library" element={<HistoryPage />} />
           <Route path="/analyses" element={<HistoryPage />} />
-          <Route path="/analyses/new" element={<NewAnalysisPage />} />
+          <Route path="/analyses/new" element={<Navigate to="/analyses?new=1" replace />} />
           <Route path="/analyses/:id" element={<AnalysisDetailPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>

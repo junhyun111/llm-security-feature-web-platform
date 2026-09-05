@@ -1,4 +1,4 @@
-import { XCircle } from 'lucide-react'
+import { CheckCircle2, XCircle } from 'lucide-react'
 
 const labels: Record<string, string> = {
   uploading: '업로드 중',
@@ -17,11 +17,12 @@ const labels: Record<string, string> = {
 }
 
 export default function StatusBadge({ status }: { status: string }) {
-  const isRedStatus = ['completed', 'approved'].includes(status)
+  const isCompleted = status === 'completed'
+  const isRedStatus = status === 'approved'
   const label = status === 'validated' ? '취약점' : labels[status] || status
   return (
     <span className={`status-badge status-${status}`}>
-      {status !== 'validated' && (isRedStatus ? <XCircle className="status-failure-icon" size={12} /> : <span className="status-dot" />)}
+      {status !== 'validated' && (isCompleted ? <CheckCircle2 className="status-complete-icon" size={12} /> : isRedStatus ? <XCircle className="status-failure-icon" size={12} /> : <span className="status-dot" />)}
       {label}
     </span>
   )

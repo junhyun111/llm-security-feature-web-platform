@@ -2,16 +2,21 @@ import {
   AlertTriangle,
   ArrowLeft,
   CircleStop,
+  CheckCircle2,
+  Clock3,
   Code2,
   Download,
+  FileCode2,
   FileDiff,
   ListChecks,
+  LoaderCircle,
   Route,
   ShieldAlert,
+  UsersRound,
   WandSparkles,
   XCircle
 } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import StatusBadge from '../components/StatusBadge'
@@ -40,7 +45,7 @@ export default function AnalysisDetailPage() {
 
   const view = params.get('view') === 'patch' ? 'patch' : 'analysis'
   const requestedTab = params.get('tab')
-  const tab: AnalysisTab = isAnalysisTab(requestedTab) ? requestedTab : 'findings'
+  const tab: AnalysisTab = isAnalysisTab(requestedTab) ? requestedTab : 'code'
   const activeFindingId = params.get('finding')
 
   const setLocation = useCallback((next: { view?: 'analysis' | 'patch'; tab?: AnalysisTab; finding?: string | null }) => {
@@ -148,10 +153,9 @@ export default function AnalysisDetailPage() {
   const patch = analysis?.patch_batch
 
   return (
-    <div className="page analysis-detail-page">
-      <Link className="back-link" to="/analyses"><ArrowLeft size={16} /> Projects</Link>
+    <div className="analysis-detail-page">
       <header className="detail-header workbench-detail-header">
-        <div><span className="eyebrow">SECURITY ANALYSIS</span><h1>{job.projectName}</h1><p>{job.fileCount.toLocaleString()} files · {job.modelId}</p></div>
+        <div className="analysis-project-bar"><Link className="analysis-back-link" to="/analyses"><ArrowLeft size={15} /> Library</Link><div><h1>{job.projectName}</h1><p>{job.fileCount.toLocaleString()} files · {job.modelId}</p></div></div>
         <div className="detail-actions">
           <StatusBadge status={job.status} />
           {analysisActive && <button className="danger-button compact" disabled={cancelBusy} onClick={cancelAnalysis}><CircleStop size={15} /> Stop scan</button>}
@@ -160,32 +164,57 @@ export default function AnalysisDetailPage() {
       </header>
 
       {actionError && <ErrorMessage error={actionError} />}
-      {analysisActive && <section className="panel progress-panel"><div className="panel-head"><div><h2>{job.message || 'Analysis is running'}</h2><p>Results will appear here as soon as processing is complete.</p></div><strong>{job.progress}%</strong></div><div className="progress-track"><div className="progress-fill" style={{ width: `${job.progress}%` }} /></div></section>}
+      {analysisActive && <AnalysisProgressDashboard job={job} findingCount={findings.length} />}
       {job.status === 'failed' && <section className="panel danger-panel"><XCircle /><div><h2>Analysis failed</h2><p>{job.errorMessage || job.message}</p></div></section>}
       {job.status === 'partial' && <section className="panel partial-result-panel"><AlertTriangle /><div><h2>Partial results are ready</h2><p>See Analysis Trace for incomplete expert tasks.</p></div></section>}
 
-      {analysis && id && <>
-        <nav className="work-mode-tabs" aria-label="Workspace mode">
-          <button className={view === 'analysis' ? 'active' : ''} onClick={() => setLocation({ view: 'analysis', tab: 'findings' })}><ShieldAlert size={15} /> Vulnerability analysis</button>
-          <button className={view === 'patch' ? 'active' : ''} onClick={() => setLocation({ view: 'patch' })}><FileDiff size={15} /> Patch {patch ? <span>1</span> : null}</button>
+      {analysis && id && <section className="analysis-workspace-shell">
+        <nav className="detail-tabs" aria-label="Analysis views">
+          <TabButton active={view === 'analysis' && tab === 'findings'} onClick={() => setLocation({ view: 'analysis', tab: 'findings' })} icon={<ListChecks size={14} />} label="Findings" count={findings.length} />
+          <TabButton active={view === 'analysis' && tab === 'code'} onClick={() => setLocation({ view: 'analysis', tab: 'code' })} icon={<Code2 size={14} />} label="Code" />
+          <TabButton active={view === 'analysis' && tab === 'overview'} onClick={() => setLocation({ view: 'analysis', tab: 'overview' })} icon={<ShieldAlert size={14} />} label="Overview" />
+          <TabButton active={view === 'analysis' && tab === 'trace'} onClick={() => setLocation({ view: 'analysis', tab: 'trace' })} icon={<Route size={14} />} label="Analysis Trace" />
+          <TabButton active={view === 'patch'} onClick={() => setLocation({ view: 'patch' })} icon={<FileDiff size={14} />} label="Patch" count={patch ? 1 : undefined} />
         </nav>
 
         {view === 'analysis' ? <>
-          <nav className="detail-tabs" aria-label="Analysis views">
-            <TabButton active={tab === 'findings'} onClick={() => setLocation({ tab: 'findings' })} icon={<ListChecks size={14} />} label="Findings" count={findings.length} />
-            <TabButton active={tab === 'code'} onClick={() => setLocation({ tab: 'code' })} icon={<Code2 size={14} />} label="Code" />
-            <TabButton active={tab === 'overview'} onClick={() => setLocation({ tab: 'overview' })} icon={<ShieldAlert size={14} />} label="Overview" />
-            <TabButton active={tab === 'trace'} onClick={() => setLocation({ tab: 'trace' })} icon={<Route size={14} />} label="Analysis Trace" />
-          </nav>
           {tab === 'findings' && <FindingsView findings={findings} validated={validated.length} uncertain={uncertain.length} rejected={rejected.length} onOpenCode={(findingId) => setLocation({ tab: 'code', finding: findingId })} onGeneratePatch={(findingId) => generatePatch([findingId])} />}
           {tab === 'code' && <Suspense fallback={<WorkbenchLoader />}><SecurityWorkbench analysisId={id} analysis={analysis} activeFindingId={activeFindingId} onFindingSelect={(findingId) => setLocation({ finding: findingId })} onGeneratePatch={(findingId) => generatePatch([findingId])} /></Suspense>}
           {tab === 'overview' && <OverviewPanel analysis={analysis} validatedCount={validated.length} />}
           {tab === 'trace' && <Suspense fallback={<WorkbenchLoader />}><AnalysisTracePanel analysis={analysis} /></Suspense>}
         </> : <PatchWorkspace findings={findings} selected={selected} setSelected={setSelected} patch={patch} busy={patchBusy} onGenerate={() => generatePatch(Array.from(selected))} onAction={patchAction} analysisId={id} />}
-      </>}
+      </section>}
     </div>
   )
 }
+
+function AnalysisProgressDashboard({ job, findingCount }: { job: AnalysisJob; findingCount: number }) {
+  const progress = Math.max(0, Math.min(100, job.progress))
+  const expertMatch = job.message.match(/Parallel Expert analysis:\s*(\d+)\/(\d+)\s*finished,\s*(\d+)\s*succeeded,\s*(\d+)\s*failed,\s*active\s*(\d+)/i)
+  const completedExperts = expertMatch ? Number(expertMatch[1]) : 0
+  const totalExperts = expertMatch ? Number(expertMatch[2]) : 0
+  const activeExperts = expertMatch ? Number(expertMatch[5]) : 0
+  const stage = progress < 20 ? 0 : progress < 40 ? 1 : progress < 95 ? 2 : 3
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - new Date(job.createdAt).getTime()) / 1000))
+  const stages = [
+    { label: 'Repository', detail: `${job.fileCount.toLocaleString()} files` },
+    { label: 'Context build', detail: stage > 1 ? 'Completed' : 'Preparing source context' },
+    { label: 'Expert analysis', detail: totalExperts ? `${completedExperts} / ${totalExperts} experts` : 'Preparing expert tasks' },
+    { label: 'Result aggregation', detail: stage === 3 ? 'Building report' : 'Waiting' }
+  ]
+  const completedLabel = totalExperts ? `${completedExperts} / ${totalExperts}` : 'Running'
+  const remaining = progress >= 95 ? 'Finalizing results' : progress >= 40 ? 'Expert analysis in progress' : 'Preparing analysis workspace'
+
+  return <section className="analysis-progress-dashboard" aria-label="Analysis progress dashboard">
+    <div className="analysis-progress-hero"><div><span className="analysis-progress-eyebrow">PARALLEL EXPERT ANALYSIS</span><h2>Analyzing your code…</h2><p>{job.message || 'Multiple experts are preparing to inspect the selected source files.'}</p></div><div className="analysis-progress-score"><strong>{progress}%</strong><span>{remaining}</span></div><div className="analysis-progress-track"><i style={{ width: `${progress}%` }} /></div><ol className="analysis-pipeline">{stages.map((item, index) => <li className={index < stage ? 'complete' : index === stage ? 'current' : ''} key={item.label}><span>{index < stage ? <CheckCircle2 size={17} /> : index === stage ? <LoaderCircle size={18} /> : <i />}</span><div><strong>{item.label}</strong><small>{item.detail}</small></div></li>)}</ol></div>
+    <div className="analysis-progress-kpis"><ProgressKpi icon={<UsersRound size={21} />} label="Experts" value={completedLabel} detail={totalExperts ? 'Completed tasks' : 'Preparing tasks'} /><ProgressKpi icon={<FileCode2 size={21} />} label="Files" value={job.fileCount.toLocaleString()} detail="Selected source files" /><ProgressKpi icon={<ShieldAlert size={21} />} label="Findings" value={findingCount.toLocaleString()} detail="Detected so far" /><ProgressKpi icon={<Clock3 size={21} />} label="Elapsed time" value={formatElapsed(elapsedSeconds)} detail="Since scan started" /></div>
+    <div className="analysis-progress-bottom"><section><h3>Currently running</h3><div className="analysis-running-item"><span><LoaderCircle size={23} /></span><div><strong>{stage === 2 ? 'Parallel expert analysis' : stages[stage].label}</strong><small>{stage === 2 && activeExperts ? `${activeExperts} expert requests currently active` : job.message || 'Preparing the next analysis step'}</small></div><b>{progress}%</b></div></section><section><h3>Completed work</h3><div className="analysis-completed-list"><p><CheckCircle2 size={16} /> Repository and source files prepared</p><p className={stage > 1 ? '' : 'pending'}><CheckCircle2 size={16} /> Context build and static analysis</p><p className={completedExperts ? '' : 'pending'}><CheckCircle2 size={16} /> {totalExperts ? `${completedExperts} expert tasks completed` : 'Expert tasks will appear here'}</p></div></section></div>
+  </section>
+}
+
+function ProgressKpi({ icon, label, value, detail }: { icon: ReactNode; label: string; value: string; detail: string }) { return <article className="analysis-progress-kpi"><span>{icon}</span><div><small>{label}</small><strong>{value}</strong><p>{detail}</p></div></article> }
+
+function formatElapsed(seconds: number) { const minutes = Math.floor(seconds / 60); const remainingSeconds = seconds % 60; return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}` }
 
 function FindingsView({ findings, validated, uncertain, rejected, onOpenCode, onGeneratePatch }: { findings: FindingBundle[]; validated: number; uncertain: number; rejected: number; onOpenCode: (id: string) => void; onGeneratePatch: (id: string) => void }) {
   const [selectedId, setSelectedId] = useState(findings[0]?.finding.finding_id || '')

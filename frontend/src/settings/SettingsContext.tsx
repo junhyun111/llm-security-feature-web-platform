@@ -18,6 +18,7 @@ type SettingsContextValue = {
 }
 
 const THEME_KEY = 'llm-security.theme'
+const THEME_DEFAULT_VERSION_KEY = 'llm-security.theme-default-v2'
 const SettingsContext = createContext<SettingsContextValue | null>(null)
 
 function readStorage(key: string, fallback = '') {
@@ -43,9 +44,15 @@ function apiKeyStorageKey(userId: string | undefined) {
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
-  const [theme, setThemeState] = useState<ThemeMode>(() =>
-    readStorage(THEME_KEY) === 'light' ? 'light' : 'dark'
-  )
+  const [theme, setThemeState] = useState<ThemeMode>(() => {
+    // Version 2 changes the product default from dark to light. The marker also
+    // upgrades browsers that stored the old default before a user chose a theme.
+    if (readStorage(THEME_DEFAULT_VERSION_KEY) !== '1') {
+      writeStorage(THEME_DEFAULT_VERSION_KEY, '1')
+      return 'light'
+    }
+    return readStorage(THEME_KEY) === 'dark' ? 'dark' : 'light'
+  })
   const [openRouterApiKey, setOpenRouterApiKeyState] = useState('')
 
   useEffect(() => {

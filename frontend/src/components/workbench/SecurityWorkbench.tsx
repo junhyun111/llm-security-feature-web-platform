@@ -71,7 +71,7 @@ export function SecurityWorkbench({
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [editorRevision, setEditorRevision] = useState(0)
-  const [problemsOpen, setProblemsOpen] = useState(false)
+  const [sideView, setSideView] = useState<'findings' | 'files'>('findings')
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
   const monacoRef = useRef<Parameters<OnMount>[1] | null>(null)
 
@@ -240,7 +240,7 @@ export function SecurityWorkbench({
   const tree = useMemo(() => buildTree(files), [files])
 
   return (
-    <section className={`security-workbench ${problemsOpen ? 'problems-open' : ''}`} aria-label="보안 코드 워크벤치">
+    <section className="security-workbench" aria-label="보안 코드 워크벤치">
       <div className="workbench-topbar">
         <div className="workbench-breadcrumb">
           <GitBranch size={14} />
@@ -255,21 +255,8 @@ export function SecurityWorkbench({
 
       <div className="workbench-main">
         <aside className="workbench-explorer">
-          <WorkbenchTitle icon={<FolderOpen size={14} />} title="Explorer" />
-          <div className="project-tree-heading">
-            <ChevronDown size={13} /> PROJECT SOURCE
-          </div>
-          <div className="file-tree">
-            {tree.children.map((node) => (
-              <FileTree
-                key={`${node.path || 'dir'}-${node.name}`}
-                node={node}
-                depth={0}
-                selectedPath={selectedPath}
-                onSelect={setSelectedPath}
-              />
-            ))}
-          </div>
+          <div className="workbench-side-tabs"><button className={sideView === 'findings' ? 'active' : ''} onClick={() => setSideView('findings')}>Findings <span>{findings.length}</span></button><button className={sideView === 'files' ? 'active' : ''} onClick={() => setSideView('files')}>Files</button></div>
+          {sideView === 'findings' ? <><label className="finding-sidebar-search"><Search size={13} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search findings" /></label><div className="finding-sidebar-list">{filteredFindings.map((bundle) => <button className={bundle.finding.finding_id === activeFindingId ? 'active' : ''} key={bundle.finding.finding_id} onClick={() => selectFinding(bundle)}><VerdictIcon verdict={bundle.validation.verdict} /><span><strong>{bundle.finding.cwes?.[0] || 'CWE'}</strong><b>{bundle.finding.title}</b><small>{bundle.finding.file}:{bundle.finding.line_start}</small></span></button>)}{!filteredFindings.length && <div className="problems-empty">No matching findings.</div>}</div></> : <><WorkbenchTitle icon={<FolderOpen size={14} />} title="Project files" /><div className="project-tree-heading"><ChevronDown size={13} /> PROJECT SOURCE</div><div className="file-tree">{tree.children.map((node) => <FileTree key={`${node.path || 'dir'}-${node.name}`} node={node} depth={0} selectedPath={selectedPath} onSelect={setSelectedPath} />)}</div></>}
         </aside>
 
         <div className="workbench-editor-column">
@@ -292,7 +279,7 @@ export function SecurityWorkbench({
                 height="100%"
                 language={file?.language || 'cpp'}
                 value={file?.content || ''}
-                theme="vs-dark"
+                theme="vs"
                 loading={<div className="workbench-message">소스 파일을 여는 중입니다…</div>}
                 onMount={onEditorMount}
                 options={{
@@ -333,43 +320,6 @@ export function SecurityWorkbench({
         </aside>
       </div>
 
-      <div className="workbench-problems">
-        <div className="problems-toolbar" onClick={() => setProblemsOpen((open) => !open)}>
-          <div className="problems-title">
-            <AlertTriangle size={14} /> This file&apos;s findings <span>{fileFindings.length}</span>
-          </div>
-          <label className="problems-search" onClick={(event) => event.stopPropagation()}>
-            <Search size={13} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="CWE, 파일, 함수 검색"
-            />
-          </label>
-        </div>
-        <div className="problems-list">
-          {filteredFindings.map((bundle) => (
-            <button
-              className={`problem-row ${bundle.finding.finding_id === activeFindingId ? 'active' : ''}`}
-              key={bundle.finding.finding_id}
-              onClick={() => selectFinding(bundle)}
-            >
-              <VerdictIcon verdict={bundle.validation.verdict} />
-              <span className="problem-title">{bundle.finding.title}</span>
-              <span className="problem-cwe">{bundle.finding.cwes?.join(', ') || 'CWE 미분류'}</span>
-              <span className="problem-location">
-                {bundle.finding.file}:{bundle.finding.line_start}
-              </span>
-              <strong title="Detection confidence">
-                D {percent(bundle.finding.confidence)}
-              </strong>
-            </button>
-          ))}
-          {!filteredFindings.length && (
-            <div className="problems-empty">검색 조건에 맞는 취약점이 없습니다.</div>
-          )}
-        </div>
-      </div>
     </section>
   )
 }
@@ -603,7 +553,7 @@ export function PatchDiffPanel({
             modified={modified?.content || ''}
             originalModelPath={`original/${path}`}
             modifiedModelPath={`${patch.status}/${path}`}
-            theme="vs-dark"
+            theme="vs"
             loading={<div className="workbench-message">패치 미리보기를 생성하는 중입니다…</div>}
             options={{
               automaticLayout: true,
