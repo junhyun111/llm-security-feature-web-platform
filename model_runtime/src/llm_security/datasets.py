@@ -352,6 +352,7 @@ def finding_from_dict(item: dict) -> Finding:
         trigger_path=[str(value) for value in item.get("trigger_path", [])],
         evidence_ids=[str(value) for value in item.get("evidence_ids", [])],
         confidence=float(item["confidence"]),
+        position=str(item.get("position", "support")),
         preconditions=[str(value) for value in item.get("preconditions", [])],
         evidence_for=[str(value) for value in item.get("evidence_for", [])],
         evidence_against=[str(value) for value in item.get("evidence_against", [])],

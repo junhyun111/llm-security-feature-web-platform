@@ -64,7 +64,10 @@ class ValidationConfig:
         default_factory=dict
     )
     use_llm_for_uncertain: bool = True
-    falsify_all_supported: bool = True
+    # The falsifier is intentionally reserved for unresolved findings. Running it
+    # on already evidence-backed findings used to make a second LLM decision an
+    # accidental hard filter and could turn true positives into false negatives.
+    falsify_all_supported: bool = False
 
 
 @dataclass(slots=True)
@@ -199,7 +202,7 @@ class AppConfig:
                     values.get("USE_LLM_FOR_UNCERTAIN", "true")
                 ),
                 falsify_all_supported=_as_bool(
-                    values.get("FALSIFY_ALL_SUPPORTED", "true")
+                    values.get("FALSIFY_ALL_SUPPORTED", "false")
                 ),
             ),
             runtime=RuntimeConfig(

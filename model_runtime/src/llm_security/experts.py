@@ -728,6 +728,7 @@ class BatchedExpertRunner:
         errors: list[str] = []
         completed_task_count = 0
         submitted_task_count = 0
+        failed_task_count = 0
 
         for batch_index, batch in enumerate(batches, start=1):
             packets, task_lookup = self._build_packets(batch)
@@ -749,15 +750,10 @@ class BatchedExpertRunner:
                 errors.append(
                     f"Expert batch {batch_index}/{len(batches)} request failed: {error}"
                 )
-                remaining = sum(
-                    len(item)
-                    for item in batches[batch_index:]
-                )
-                if remaining:
-                    errors.append(
-                        f"Stopped before submitting {remaining} remaining Expert tasks."
-                    )
-                break
+                # A physical batch is only a transport optimization. Do not let
+                # one provider failure erase later independent Expert tasks.
+                failed_task_count += len(batch)
+                continue
             batch_findings, batch_errors, batch_completed = (
                 self._parse_batch_response(
                     response.data,
@@ -768,6 +764,7 @@ class BatchedExpertRunner:
             findings.extend(batch_findings)
             usage.append(response.usage)
             completed_task_count += batch_completed
+            failed_task_count += len(batch) - batch_completed
             errors.extend(
                 f"Expert batch {batch_index}/{len(batches)}: {error}"
                 for error in batch_errors
@@ -787,6 +784,7 @@ class BatchedExpertRunner:
             task_count=len(tasks),
             submitted_task_count=submitted_task_count,
             completed_task_count=completed_task_count,
+            failed_task_count=failed_task_count,
             skipped_task_count=len(oversized),
         )
 

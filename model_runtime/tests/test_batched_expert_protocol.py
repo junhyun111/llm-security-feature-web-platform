@@ -84,8 +84,13 @@ class UnknownTaskClient:
 
 
 class SecondBatchFailureClient(ExactResultClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed_once = False
+
     def complete(self, **kwargs) -> LLMResponse:
-        if len(self.calls) == 1:
+        if len(self.calls) == 1 and not self.failed_once:
+            self.failed_once = True
             raise RuntimeError("provider failure")
         return super().complete(**kwargs)
 
@@ -202,10 +207,11 @@ class BatchedExpertProtocolTest(unittest.TestCase):
         output = runner.run(candidates, [route(item) for item in candidates])
 
         self.assertEqual(20, output.task_count)
-        self.assertEqual(12, output.submitted_task_count)
-        self.assertEqual(6, output.completed_task_count)
+        self.assertEqual(20, output.submitted_task_count)
+        self.assertEqual(14, output.completed_task_count)
+        self.assertEqual(6, output.failed_task_count)
         self.assertTrue(any("batch 2/4 request failed" in item for item in output.errors))
-        self.assertTrue(any("8 remaining Expert tasks" in item for item in output.errors))
+        self.assertFalse(any("Stopped before submitting" in item for item in output.errors))
 
     def test_job_outcome_distinguishes_failed_partial_and_completed(self) -> None:
         failed = _analysis_outcome(

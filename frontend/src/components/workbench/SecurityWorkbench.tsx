@@ -388,7 +388,7 @@ function FindingInspector({
   onGeneratePatch?: (findingId: string) => void
 }) {
   const { finding, validation } = bundle
-  const patchable = validation.verdict !== 'rejected'
+  const patchable = validation.verdict === 'validated'
   return (
     <div className="finding-inspector-body">
       <div className="inspector-heading">
@@ -434,7 +434,7 @@ function FindingInspector({
             disabled={patchLocked}
             onChange={(event) => onPatchToggle(finding.finding_id, event.target.checked)}
           />
-          통합 패치에 포함{validation.verdict === 'uncertain' ? ' (생성 전 확인 필요)' : ''}
+          통합 패치에 포함
         </label>
       )}
       {onGeneratePatch && patchable && (

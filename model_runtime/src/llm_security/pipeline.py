@@ -81,6 +81,16 @@ class VulnerabilityPipeline:
 
         findings = self.aggregator.aggregate(structurally_valid)
         validations, validator_usage = self.validator.validate_all(findings, candidates)
+        failed_expert_tasks = getattr(expert_output, "failed_task_count", 0)
+        validation_failed = any(item.failed for item in validations)
+        cancelled = getattr(expert_output, "cancelled", False)
+        analysis_status = (
+            "cancelled"
+            if cancelled
+            else "partial_failure"
+            if failed_expert_tasks or validation_failed or expert_output.errors
+            else "completed"
+        )
         return PipelineResult(
             case_id=case.case_id,
             candidates=candidates,
@@ -99,11 +109,7 @@ class VulnerabilityPipeline:
                 "completed_task_count",
                 expert_output.submitted_task_count,
             ),
-            failed_expert_task_count=getattr(
-                expert_output,
-                "failed_task_count",
-                0,
-            ),
+            failed_expert_task_count=failed_expert_tasks,
             incomplete_candidate_count=getattr(
                 expert_output,
                 "incomplete_candidate_count",
@@ -129,6 +135,7 @@ class VulnerabilityPipeline:
                     0,
                 ),
             ),
-            cancelled=getattr(expert_output, "cancelled", False),
+            cancelled=cancelled,
             expert_failures=getattr(expert_output, "failures", []),
+            analysis_status=analysis_status,
         )

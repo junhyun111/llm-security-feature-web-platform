@@ -184,6 +184,8 @@ class RequestAwareWebJobService(WebJobService):
             cancel_callback=lambda: self._is_cancel_requested(job.job_id),
         ).run(case)
         result.cancelled = result.cancelled or self._is_cancel_requested(job.job_id)
+        if result.cancelled:
+            result.analysis_status = "cancelled"
         if not result.cancelled:
             progress(95, "Preparing evidence-grounded report")
 
@@ -202,6 +204,15 @@ class RequestAwareWebJobService(WebJobService):
             item.verdict == ValidationVerdict.VALIDATED
             for item in result.validations
         )
+        review = sum(
+            item.verdict == ValidationVerdict.UNCERTAIN
+            for item in result.validations
+        )
+        rejected = sum(
+            item.verdict == ValidationVerdict.REJECTED
+            for item in result.validations
+        )
+        validation_failures = sum(item.failed for item in result.validations)
 
         options = self.request_options(job.job_id)
         return {
@@ -224,6 +235,10 @@ class RequestAwareWebJobService(WebJobService):
                 ),
                 "finding_count": len(result.findings),
                 "validated_finding_count": validated,
+                "review_finding_count": review,
+                "rejected_finding_count": rejected,
+                "validation_failure_count": validation_failures,
+                "analysis_status": result.analysis_status,
                 "total_cost": sum(item.cost for item in result.usage),
                 "request_count": len(result.usage),
                 "expert_task_count": result.expert_task_count,
@@ -259,6 +274,7 @@ class RequestAwareWebJobService(WebJobService):
                     or result.skipped_expert_task_count
                     or result.recovered_expert_task_count
                     or result.cancelled
+                    or validation_failures
                     or result.errors
                     or source_warnings
                 ),
@@ -300,8 +316,8 @@ class RequestAwareWebJobService(WebJobService):
             for finding_id in selected_ids
         ]
         for bundle in bundles:
-            if bundle["validation"]["verdict"] == ValidationVerdict.REJECTED.value:
-                raise ValueError("Rejected findings cannot be patched")
+            if bundle["validation"]["verdict"] != ValidationVerdict.VALIDATED.value:
+                raise ValueError("Only validated findings can be patched")
 
         prior_options = self.request_options(job_id)
         config = self._config_for_options(RuntimeJobOptions(

@@ -12,6 +12,11 @@ class FindingAggregator:
     def aggregate(self, findings: list[Finding]) -> list[Finding]:
         buckets: dict[tuple[str, str, str], list[Finding]] = defaultdict(list)
         for finding in findings:
+            # An Expert may explicitly oppose its own tentative hypothesis. It
+            # contributes no positive security finding; concrete counter-evidence
+            # remains the Validator's responsibility.
+            if finding.position == "oppose":
+                continue
             buckets[(finding.candidate_id, finding.file, finding.function)].append(finding)
 
         aggregated: list[Finding] = []
@@ -78,11 +83,12 @@ class FindingAggregator:
         )
         primary.supporting_experts = sorted(experts, key=lambda item: item.value)
         primary.supporting_models = sorted(models)
-        agreement_bonus = 0.03 * max(0, len(experts) - 1)
-        diversity_bonus = 0.02 * max(0, len(models) - 1)
-        primary.confidence = min(
-            1.0,
-            max(item.confidence for item in group) + agreement_bonus + diversity_bonus,
+        # This is an evidence merge, not a trained/calibrated probability model.
+        # Keep the strongest Expert's bounded confidence for transparency but do
+        # not fabricate agreement weights or probability calibration.
+        primary.confidence = max(item.confidence for item in group)
+        primary.position = (
+            "support" if any(item.position == "support" for item in group) else "unknown"
         )
         intersection_start = max(item.line_start for item in group)
         intersection_end = min(item.line_end for item in group)

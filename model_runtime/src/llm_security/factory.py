@@ -170,10 +170,13 @@ def build_batched_web_pipeline(
             minimum_confidence_by_expert=(
                 config.validation.minimum_confidence_by_expert
             ),
-            client=None,
-            model=None,
+            # The critic is selective: EvidenceValidator calls it only for
+            # uncertain findings, so web analysis retains a real falsification
+            # path without turning every finding into another LLM request.
+            client=client,
+            model=config.model.validator_model,
             strong_model=None,
-            use_llm_for_uncertain=False,
+            use_llm_for_uncertain=True,
             falsify_all_supported=False,
         ),
         candidate_gate=CandidateGate(
@@ -231,10 +234,10 @@ def build_parallel_web_pipeline(
             minimum_confidence_by_expert=(
                 config.validation.minimum_confidence_by_expert
             ),
-            client=None,
-            model=None,
+            client=client,
+            model=config.model.validator_model,
             strong_model=None,
-            use_llm_for_uncertain=False,
+            use_llm_for_uncertain=True,
             falsify_all_supported=False,
         ),
         candidate_gate=CandidateGate(

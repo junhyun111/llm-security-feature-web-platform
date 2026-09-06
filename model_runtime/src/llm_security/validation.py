@@ -61,6 +61,8 @@ class EvidenceValidator:
         self.model = model
         self.strong_model = strong_model
         self.use_llm_for_uncertain = use_llm_for_uncertain
+        # Retained only so existing callers/configuration files remain readable.
+        # Validation is deliberately selective regardless of this legacy flag.
         self.falsify_all_supported = falsify_all_supported
 
     def validate_all(
@@ -78,31 +80,34 @@ class EvidenceValidator:
             candidate = by_id[finding.candidate_id]
             result = self.validate(finding, candidate)
             should_falsify = (
-                result.verdict != ValidationVerdict.REJECTED
-                and (
-                    self.falsify_all_supported
-                    or (
-                        result.verdict == ValidationVerdict.UNCERTAIN
-                        and self.use_llm_for_uncertain
-                    )
-                )
+                # A falsifier is an uncertainty-resolution step, not another
+                # binary gate in front of a supported finding.
+                result.verdict == ValidationVerdict.UNCERTAIN
+                and self.use_llm_for_uncertain
                 and self.client is not None
                 and self.model is not None
             )
             if should_falsify:
-                critic, llm_usage = self._llm_falsify(finding, candidate, result)
-                usage.append(llm_usage)
-                disagrees = (
-                    result.verdict == ValidationVerdict.VALIDATED
-                    and critic.verdict == ValidationVerdict.REJECTED
-                )
-                if disagrees and self.strong_model:
-                    result, judge_usage = self._strong_judge(
-                        finding, candidate, result, critic
-                    )
-                    usage.append(judge_usage)
-                else:
+                try:
+                    critic, llm_usage = self._llm_falsify(finding, candidate, result)
+                    usage.append(llm_usage)
                     result = critic
+                except Exception as error:
+                    # Provider, schema, and timeout failures are not evidence
+                    # against the finding. Keep it reviewable and make the
+                    # degraded analysis explicit to callers.
+                    result = ValidationResult(
+                        finding_id=finding.finding_id,
+                        verdict=ValidationVerdict.UNCERTAIN,
+                        confidence=None,
+                        checks=result.checks,
+                        reasons=[
+                            *result.reasons,
+                            "반증 검증을 완료하지 못해 검토 상태로 유지했습니다: "
+                            + str(error)[:300],
+                        ],
+                        failed=True,
+                    )
             results.append(result)
         return results, usage
 
@@ -157,9 +162,15 @@ class EvidenceValidator:
                 "위치 또는 인용된 정적 근거를 확인할 수 없습니다: "
                 + ", ".join(failed)
             )
-        elif checks["contradicting_guard"]:
+        elif counter_evidence := self._static_counter_evidence(finding, candidate):
             verdict = ValidationVerdict.REJECTED
-            reasons.append("정적 guard가 보고된 보호 로직 누락 주장과 모순됩니다.")
+            finding.evidence_against = counter_evidence
+            reasons.append("명시적인 정적 보호 로직이 보고된 주장과 모순됩니다.")
+        elif finding.position != "support":
+            verdict = ValidationVerdict.UNCERTAIN
+            reasons.append(
+                "Expert가 완결된 지지 근거를 제출하지 않아 검토 상태로 유지합니다."
+            )
         elif (
             candidate.feature_schema_version.startswith("semantic-cwe-")
             and (
@@ -217,7 +228,10 @@ class EvidenceValidator:
             "confidence_sufficient": (
                 finding.confidence >= self.confidence_threshold_for(finding.expert)
             ),
-            "contradicting_guard": self._has_contradicting_guard(finding, candidate),
+            "expert_supports_hypothesis": finding.position == "support",
+            "contradicting_guard": bool(
+                self._static_counter_evidence(finding, candidate)
+            ),
         }
 
     def confidence_threshold_for(self, expert: ExpertFamily) -> float:
@@ -226,7 +240,12 @@ class EvidenceValidator:
         )
 
     @staticmethod
-    def _has_contradicting_guard(finding: Finding, candidate: Candidate) -> bool:
+    def _static_counter_evidence(finding: Finding, candidate: Candidate) -> list[str]:
+        """Return location-bearing static counter-evidence, if it proves safety.
+
+        An aggregate guard-density feature is intentionally not enough to reject
+        a candidate: the guard must be attached to the reported memory sink.
+        """
         if finding.expert == ExpertFamily.MEMORY_BOUNDS:
             cited_kinds = {
                 evidence.kind
@@ -249,10 +268,12 @@ class EvidenceValidator:
             # falsify a UAF/double-free hypothesis merely because both facts
             # occur in the same candidate function.
             if cited_kinds & temporal_kinds and not cited_kinds & spatial_kinds:
-                return False
+                return []
             if candidate.feature_schema_version.startswith("semantic-"):
-                return any(
-                    evidence.kind == "guard_protects_sink"
+                protected = [
+                    evidence
+                    for evidence in candidate.evidence
+                    if evidence.kind == "guard_protects_sink"
                     and evidence.facts.get("semantically_protective") is True
                     and (
                         evidence.facts.get("sink_line") is None
@@ -260,13 +281,12 @@ class EvidenceValidator:
                         <= int(evidence.facts["sink_line"])
                         <= finding.line_end
                     )
-                    for evidence in candidate.evidence
-                )
-            return (
-                candidate.features.get("bounds_guard_count", 0.0) > 0
-                and candidate.features.get("guard_density", 0.0) >= 1.0
-            )
-        return False
+                ]
+                return [
+                    f"{evidence.file}:{evidence.line}: {evidence.expression}"
+                    for evidence in protected
+                ]
+        return []
 
     def _llm_falsify(
         self,
@@ -312,17 +332,37 @@ class EvidenceValidator:
         )
         verdict = ValidationVerdict(response.data["verdict"])
         counter_evidence = [str(item) for item in response.data["evidence_against"]]
-        finding.evidence_against = list(dict.fromkeys(counter_evidence))
+        counter_evidence = list(dict.fromkeys(counter_evidence))
+        reasons = [str(item) for item in response.data["reasons"]]
+        if (
+            verdict == ValidationVerdict.REJECTED
+            and not self._has_concrete_counter_evidence(counter_evidence)
+        ):
+            verdict = ValidationVerdict.UNCERTAIN
+            counter_evidence = []
+            reasons.append(
+                "구체적인 위치를 포함한 반증 근거가 없어 기각하지 않고 검토 상태로 유지했습니다."
+            )
+        finding.evidence_against = counter_evidence
         return (
             ValidationResult(
                 finding_id=finding.finding_id,
                 verdict=verdict,
                 confidence=float(response.data["confidence"]),
                 checks=preliminary.checks,
-                reasons=[str(item) for item in response.data["reasons"]],
+                reasons=reasons,
                 model_used=response.usage.model,
             ),
             response.usage,
+        )
+
+    @staticmethod
+    def _has_concrete_counter_evidence(values: list[str]) -> bool:
+        """Require a location-bearing description before a critic may reject."""
+        return any(
+            any(character.isdigit() for character in value)
+            and len(value.strip()) >= 12
+            for value in values
         )
 
     def _strong_judge(

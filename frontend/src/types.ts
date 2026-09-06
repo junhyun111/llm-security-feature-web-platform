@@ -147,6 +147,10 @@ export type AnalysisPayload = {
     cwe_hypothesis_count: number
     finding_count: number
     validated_finding_count: number
+    review_finding_count?: number
+    rejected_finding_count?: number
+    validation_failure_count?: number
+    analysis_status?: 'completed' | 'partial_failure' | 'cancelled'
     total_cost: number
     request_count: number
     submitted_expert_task_count: number

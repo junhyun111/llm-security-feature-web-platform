@@ -219,6 +219,9 @@ class Finding:
     trigger_path: list[str]
     evidence_ids: list[str]
     confidence: float
+    # Experts collect evidence for a hypothesis.  This is deliberately not a
+    # final vulnerability verdict; aggregation and validation make that call.
+    position: str = "support"
     preconditions: list[str] = field(default_factory=list)
     evidence_for: list[str] = field(default_factory=list)
     evidence_against: list[str] = field(default_factory=list)
@@ -239,6 +242,9 @@ class ValidationResult:
     checks: dict[str, bool | None]
     reasons: list[str]
     model_used: str | None = None
+    # A failed falsification request is an analysis-quality signal, never proof
+    # that the code is safe.
+    failed: bool = False
 
 
 @dataclass(slots=True)
@@ -275,6 +281,7 @@ class PipelineResult:
     covered_candidate_count: int = 0
     cancelled: bool = False
     expert_failures: list[Any] = field(default_factory=list)
+    analysis_status: str = "completed"
 
     @property
     def validated_findings(self) -> list[Finding]:

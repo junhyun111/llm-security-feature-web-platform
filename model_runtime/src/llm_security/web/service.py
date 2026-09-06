@@ -359,8 +359,8 @@ class WebJobService:
         analysis = self.get_analysis(job_id)
         bundles = [_finding_bundle(analysis, finding_id) for finding_id in selected_ids]
         for bundle in bundles:
-            if bundle["validation"]["verdict"] == ValidationVerdict.REJECTED.value:
-                raise ValueError("Rejected findings cannot be patched")
+            if bundle["validation"]["verdict"] != ValidationVerdict.VALIDATED.value:
+                raise ValueError("Only validated findings can be patched")
 
         config = AppConfig.from_env(self.settings.env_file)
         config.model.max_output_tokens = self.settings.patch_max_output_tokens
@@ -473,8 +473,8 @@ class WebJobService:
     def propose_patch(self, job_id: str, finding_id: str) -> PatchRecord:
         analysis = self.get_analysis(job_id)
         bundle = _finding_bundle(analysis, finding_id)
-        if bundle["validation"]["verdict"] == ValidationVerdict.REJECTED.value:
-            raise ValueError("Rejected findings cannot be patched")
+        if bundle["validation"]["verdict"] != ValidationVerdict.VALIDATED.value:
+            raise ValueError("Only validated findings can be patched")
         existing = self._read_patch(job_id, finding_id)
         if existing and existing.status in {"proposed", "approved"}:
             return existing
@@ -859,6 +859,8 @@ class WebJobService:
             cancel_callback=lambda: self._is_cancel_requested(job.job_id),
         ).run(case)
         result.cancelled = result.cancelled or self._is_cancel_requested(job.job_id)
+        if result.cancelled:
+            result.analysis_status = "cancelled"
         if not result.cancelled:
             progress(95, "Preparing evidence-grounded report")
         candidates = {item.candidate_id: item for item in result.candidates}
@@ -876,6 +878,15 @@ class WebJobService:
             item.verdict == ValidationVerdict.VALIDATED
             for item in result.validations
         )
+        review = sum(
+            item.verdict == ValidationVerdict.UNCERTAIN
+            for item in result.validations
+        )
+        rejected = sum(
+            item.verdict == ValidationVerdict.REJECTED
+            for item in result.validations
+        )
+        validation_failures = sum(item.failed for item in result.validations)
         return {
             "summary": {
                 "router_artifact": str(self.settings.router_artifact.resolve()),
@@ -896,6 +907,10 @@ class WebJobService:
                 ),
                 "finding_count": len(result.findings),
                 "validated_finding_count": validated,
+                "review_finding_count": review,
+                "rejected_finding_count": rejected,
+                "validation_failure_count": validation_failures,
+                "analysis_status": result.analysis_status,
                 "total_cost": sum(item.cost for item in result.usage),
                 "request_count": len(result.usage),
                 "expert_task_count": result.expert_task_count,
@@ -931,6 +946,7 @@ class WebJobService:
                     or result.skipped_expert_task_count
                     or result.recovered_expert_task_count
                     or result.cancelled
+                    or validation_failures
                     or result.errors
                     or source_warnings
                 ),
@@ -1334,6 +1350,7 @@ def _finding_from_raw(raw: dict) -> Finding:
         trigger_path=[str(item) for item in raw.get("trigger_path", [])],
         evidence_ids=[str(item) for item in raw.get("evidence_ids", [])],
         confidence=float(raw["confidence"]),
+        position=str(raw.get("position", "support")),
         preconditions=[str(item) for item in raw.get("preconditions", [])],
         evidence_for=[str(item) for item in raw.get("evidence_for", [])],
         evidence_against=[str(item) for item in raw.get("evidence_against", [])],
@@ -1358,6 +1375,7 @@ def _validation_from_raw(raw: dict) -> ValidationResult:
         checks=dict(raw.get("checks", {})),
         reasons=[str(item) for item in raw.get("reasons", [])],
         model_used=raw.get("model_used"),
+        failed=bool(raw.get("failed", False)),
     )
 
 
