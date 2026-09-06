@@ -1361,6 +1361,14 @@ def _finding_from_raw(raw: dict) -> Finding:
             ExpertFamily(item) for item in raw.get("supporting_experts", [])
         ],
         supporting_models=[str(item) for item in raw.get("supporting_models", [])],
+        probability=(
+            None if raw.get("probability") is None else float(raw["probability"])
+        ),
+        decision_features={
+            str(key): float(value)
+            for key, value in raw.get("decision_features", {}).items()
+        },
+        evidence_bundle_id=raw.get("evidence_bundle_id"),
     )
 
 

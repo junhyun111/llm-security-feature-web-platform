@@ -11,6 +11,7 @@ from .llm import LLMClient
 from .models import (
     Candidate,
     ExpertAssignment,
+    ExpertEvidence,
     ExpertFamily,
     Finding,
     RouteDecision,
@@ -20,8 +21,8 @@ from .prompts import (
     batched_expert_messages,
     batched_findings_schema,
     expert_messages,
-    finding_from_payload,
-    findings_schema,
+    expert_evidence_from_payload,
+    expert_evidence_schema,
 )
 
 
@@ -74,6 +75,7 @@ class ExpertRunOutput:
     covered_candidate_count: int = 0
     cancelled: bool = False
     failures: list[ExpertTaskFailure] = field(default_factory=list)
+    evidence: list[ExpertEvidence] = field(default_factory=list)
 
 
 class ExpertRunner:
@@ -97,7 +99,7 @@ class ExpertRunner:
         routes: list[RouteDecision],
     ) -> ExpertRunOutput:
         by_id = {candidate.candidate_id: candidate for candidate in candidates}
-        findings: list[Finding] = []
+        evidence: list[ExpertEvidence] = []
         usage: list[UsageRecord] = []
         errors: list[str] = []
         task_count = 0
@@ -120,7 +122,7 @@ class ExpertRunner:
                     response = self.client.complete(
                         model=assignment.model_id,
                         messages=expert_messages(candidate, context),
-                        response_schema=findings_schema(),
+                        response_schema=expert_evidence_schema(),
                         metadata={
                             "task": "expert",
                             "candidate": candidate,
@@ -132,11 +134,10 @@ class ExpertRunner:
                     payloads = response.data.get("findings", [])
                     if not isinstance(payloads, list):
                         raise TypeError("The model response 'findings' field must be a list")
-                    for index, payload in enumerate(payloads, start=1):
-                        findings.append(
-                            finding_from_payload(
+                    for payload in payloads:
+                        evidence.append(
+                            expert_evidence_from_payload(
                                 payload,
-                                index=index,
                                 candidate=candidate,
                                 expert=expert,
                                 model_id=assignment.model_id,
@@ -150,7 +151,8 @@ class ExpertRunner:
                         f"{assignment.model_id}: {error}"
                     )
         return ExpertRunOutput(
-            findings=findings,
+            findings=[],
+            evidence=evidence,
             usage=usage,
             errors=errors,
             task_count=task_count,
@@ -170,7 +172,7 @@ class ExpertTask:
 class ExpertTaskResult:
     task_id: str
     candidate_id: str
-    findings: list[Finding]
+    findings: list[ExpertEvidence]
     usage: UsageRecord
 
 
@@ -416,7 +418,7 @@ class ParallelExpertRunner:
                 if cancelled:
                     break
 
-        findings: list[Finding] = []
+        findings: list[ExpertEvidence] = []
         usage: list[UsageRecord] = []
         ordered_errors: list[str] = []
         candidate_ids = {task.candidate.candidate_id for task in tasks}
@@ -451,7 +453,8 @@ class ParallelExpertRunner:
         )
 
         return ExpertRunOutput(
-            findings=findings,
+            findings=[],
+            evidence=findings,
             usage=usage,
             errors=ordered_errors,
             task_count=total,
@@ -540,7 +543,7 @@ class ParallelExpertRunner:
         response = self.client.complete(
             model=assignment.model_id,
             messages=expert_messages(candidate, context),
-            response_schema=findings_schema(best_effort=True),
+            response_schema=expert_evidence_schema(),
             metadata={
                 "task": "expert",
                 "task_id": task.task_id,
@@ -553,16 +556,14 @@ class ParallelExpertRunner:
         if not isinstance(payloads, list):
             raise TypeError("The model response 'findings' field must be a list")
         findings = [
-            finding_from_payload(
+            expert_evidence_from_payload(
                 payload,
-                index=index,
                 candidate=candidate,
                 expert=expert,
                 model_id=response.usage.model,
                 prompt_version=assignment.prompt_version,
-                best_effort=True,
             )
-            for index, payload in enumerate(payloads, start=1)
+            for payload in payloads
         ]
         return ExpertTaskResult(
             task_id=task.task_id,
@@ -723,7 +724,7 @@ class BatchedExpertRunner:
         ]
         batches, oversized = self._partition_batches(tasks)
 
-        findings: list[Finding] = []
+        findings: list[ExpertEvidence] = []
         usage: list[UsageRecord] = []
         errors: list[str] = []
         completed_task_count = 0
@@ -778,7 +779,8 @@ class BatchedExpertRunner:
             )
 
         return ExpertRunOutput(
-            findings=findings,
+            findings=[],
+            evidence=findings,
             usage=usage,
             errors=errors,
             task_count=len(tasks),
@@ -865,8 +867,8 @@ class BatchedExpertRunner:
         task_lookup: dict[str, tuple[Candidate, ExpertFamily]],
         *,
         model_id: str,
-    ) -> tuple[list[Finding], list[str], int]:
-        findings: list[Finding] = []
+    ) -> tuple[list[ExpertEvidence], list[str], int]:
+        findings: list[ExpertEvidence] = []
         errors: list[str] = []
         completed: set[str] = set()
         seen: set[str] = set()
@@ -907,18 +909,14 @@ class BatchedExpertRunner:
                     raise TypeError(f"Findings for {task_id} must be a list")
 
                 converted = [
-                    finding_from_payload(
+                    expert_evidence_from_payload(
                         finding_payload,
-                        index=index,
                         candidate=candidate,
                         expert=expert,
                         model_id=model_id,
                         prompt_version=self.prompt_version,
                     )
-                    for index, finding_payload in enumerate(
-                        task_findings,
-                        start=1,
-                    )
+                    for finding_payload in task_findings
                 ]
             except (KeyError, TypeError, ValueError) as error:
                 errors.append(str(error))

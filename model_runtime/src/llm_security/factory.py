@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .aggregation import FindingAggregator
+from .aggregation import EvidenceAggregator
+from .decision import CalibratedFindingScorer, DecisionPolicy, TrainedDecisionLayer
 from .analysis import LearnedCandidateRanker, SemanticStaticAnalyzer
 from .config import AppConfig
 from .evidence import ContextBuilder
@@ -55,6 +56,27 @@ def build_context_builder(config: AppConfig) -> ContextBuilder:
     )
 
 
+def build_decision_components(
+    config: AppConfig,
+) -> tuple[CalibratedFindingScorer, DecisionPolicy]:
+    if config.validation.decision_model_path:
+        try:
+            artifact = TrainedDecisionLayer.load(config.validation.decision_model_path)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                "Cannot load configured calibrated decision artifact: "
+                + config.validation.decision_model_path
+            ) from exc
+        config.validation.low_probability_threshold = artifact.low_threshold
+        config.validation.high_probability_threshold = artifact.high_threshold
+        return artifact.scorer, DecisionPolicy(
+            low_threshold=artifact.low_threshold,
+            high_threshold=artifact.high_threshold,
+        )
+    return CalibratedFindingScorer(), DecisionPolicy(
+        low_threshold=config.validation.low_probability_threshold,
+        high_threshold=config.validation.high_probability_threshold,
+    )
 def build_candidate_analyzer(
     config: AppConfig,
     *,
@@ -96,6 +118,7 @@ def build_candidate_analyzer(
 
 def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
     client = build_openrouter_client(config)
+    scorer, decision_policy = build_decision_components(config)
     analyzer = build_candidate_analyzer(
         config,
         require_ranker=isinstance(router, BudgetedUtilityRouter),
@@ -109,7 +132,7 @@ def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
             context_builder=build_context_builder(config),
             models_by_family=config.model.expert_models,
         ),
-        aggregator=FindingAggregator(),
+        aggregator=EvidenceAggregator(),
         validator=EvidenceValidator(
             minimum_confidence=config.validation.minimum_confidence,
             minimum_confidence_by_expert=(
@@ -126,6 +149,8 @@ def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
             threshold=config.candidate_gate.threshold,
         ),
         max_candidates=config.analysis.max_candidates_per_project,
+        scorer=scorer,
+        decision_policy=decision_policy,
     )
 
 
@@ -139,6 +164,7 @@ def build_batched_web_pipeline(
     """Build the web pipeline with bounded LLM batches for logical Experts."""
 
     client = build_openrouter_client(config)
+    scorer, decision_policy = build_decision_components(config)
     if isinstance(router, BudgetedUtilityRouter):
         trained_models = {
             assignment.model_id for assignment in router.assignments.values()
@@ -164,7 +190,7 @@ def build_batched_web_pipeline(
             max_batch_characters=max_batch_characters,
             max_tasks=max_batch_tasks,
         ),
-        aggregator=FindingAggregator(),
+        aggregator=EvidenceAggregator(),
         validator=EvidenceValidator(
             minimum_confidence=config.validation.minimum_confidence,
             minimum_confidence_by_expert=(
@@ -184,6 +210,8 @@ def build_batched_web_pipeline(
             threshold=config.candidate_gate.threshold,
         ),
         max_candidates=config.analysis.max_candidates_per_project,
+        scorer=scorer,
+        decision_policy=decision_policy,
     )
 
 
@@ -201,6 +229,7 @@ def build_parallel_web_pipeline(
     config.model.json_repair = True
     config.model.structured_output_fallback = True
     client = build_openrouter_client(config)
+    scorer, decision_policy = build_decision_components(config)
     if isinstance(router, BudgetedUtilityRouter):
         trained_models = {
             assignment.model_id for assignment in router.assignments.values()
@@ -228,7 +257,7 @@ def build_parallel_web_pipeline(
             progress_callback=progress_callback,
             cancel_callback=cancel_callback,
         ),
-        aggregator=FindingAggregator(),
+        aggregator=EvidenceAggregator(),
         validator=EvidenceValidator(
             minimum_confidence=config.validation.minimum_confidence,
             minimum_confidence_by_expert=(
@@ -245,4 +274,6 @@ def build_parallel_web_pipeline(
             threshold=config.candidate_gate.threshold,
         ),
         max_candidates=config.analysis.max_candidates_per_project,
+        scorer=scorer,
+        decision_policy=decision_policy,
     )

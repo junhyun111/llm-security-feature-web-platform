@@ -118,20 +118,17 @@ class RequestAwareWebJobService(WebJobService):
             for family in config.model.expert_models
         }
 
+        # Decision and Candidate Gate thresholds are exported from validation
+        # calibration. A per-request UI slider must not silently invalidate the
+        # measured recall/FPR operating point. Sensitivity controls only the
+        # candidate review budget, which preserves its documented cost/coverage
+        # trade-off without changing the learned decision boundary.
         sensitivity = min(1.0, max(0.0, options.sensitivity))
-
-        # 0.5 exactly reproduces the current .env defaults:
-        # Candidate Gate 0.40 / minimum validation confidence 0.60.
-        # Higher sensitivity lowers both thresholds.
-        candidate_threshold = round(0.70 - (0.60 * sensitivity), 4)
-        validation_threshold = round(0.85 - (0.50 * sensitivity), 4)
-
-        config.candidate_gate.threshold = candidate_threshold
-        config.validation.minimum_confidence = validation_threshold
-        config.validation.minimum_confidence_by_expert = {
-            expert: validation_threshold
-            for expert in config.validation.minimum_confidence_by_expert
-        }
+        base_candidate_budget = config.analysis.max_candidates_per_project
+        config.analysis.max_candidates_per_project = max(
+            1,
+            round(base_candidate_budget * (0.5 + sensitivity)),
+        )
 
         config.validate()
         return config
@@ -227,6 +224,12 @@ class RequestAwareWebJobService(WebJobService):
                     if config.analysis.candidate_ranker_path
                     else None
                 ),
+                "decision_model_artifact": config.validation.decision_model_path,
+                "decision_model_artifact_sha256": (
+                    _file_sha256(config.validation.decision_model_path)
+                    if config.validation.decision_model_path
+                    else None
+                ),
                 "max_candidates": config.analysis.max_candidates_per_project,
                 "source_file_count": len(source_files),
                 "candidate_count": len(result.candidates),
@@ -282,7 +285,12 @@ class RequestAwareWebJobService(WebJobService):
                     **options.safe_metadata(),
                     "effective_model": config.model.expert_model,
                     "candidate_gate_threshold": config.candidate_gate.threshold,
-                    "minimum_confidence": config.validation.minimum_confidence,
+                    "decision_low_threshold": (
+                        config.validation.low_probability_threshold
+                    ),
+                    "decision_high_threshold": (
+                        config.validation.high_probability_threshold
+                    ),
                 },
             },
             "findings": bundles,

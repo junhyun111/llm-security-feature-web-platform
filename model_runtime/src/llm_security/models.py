@@ -201,6 +201,82 @@ class RouteDecision:
 
 
 @dataclass(slots=True)
+class ExpertEvidence:
+    """A compact Expert observation, before any vulnerability decision.
+
+    ``self_confidence`` is deliberately only an input feature.  It must never be
+    interpreted as the final probability of a vulnerability.
+    """
+
+    candidate_id: str
+    expert: ExpertFamily
+    position: str
+    vulnerability_family: str
+    cwes: list[str]
+    evidence_ids: list[str]
+    source: str | None
+    sink: str | None
+    trigger_path: list[str]
+    preconditions: list[str]
+    self_confidence: float | None = None
+    model_id: str | None = None
+    prompt_version: str | None = None
+
+
+@dataclass(slots=True)
+class EvidenceBundle:
+    """Evidence fused across Experts but not yet classified."""
+
+    bundle_id: str
+    candidate_id: str
+    file: str
+    function: str
+    line_start: int
+    line_end: int
+    vulnerability_family: str
+    cwes: list[str]
+    evidence_ids: list[str]
+    supporting_experts: list[ExpertFamily]
+    unknown_experts: list[ExpertFamily]
+    sources: list[str]
+    sinks: list[str]
+    trigger_paths: list[list[str]]
+    preconditions: list[str]
+    expert_confidences: list[float]
+    model_ids: list[str]
+    support_count: int = 0
+    unknown_count: int = 0
+    total_evidence_references: int = 0
+
+
+@dataclass(slots=True)
+class ScoredEvidenceBundle:
+    bundle: EvidenceBundle
+    probability: float
+    features: dict[str, float]
+    raw_probability: float | None = None
+
+
+@dataclass(slots=True)
+class CounterEvidence:
+    evidence_id: str
+    file: str
+    line: int
+    expression: str
+    relation: str
+    sink_line: int | None = None
+
+
+@dataclass(slots=True)
+class FalsificationResult:
+    falsified: bool
+    counter_evidence: list[CounterEvidence]
+    reason: str
+    model_used: str | None = None
+    failed: bool = False
+
+
+@dataclass(slots=True)
 class Finding:
     finding_id: str
     candidate_id: str
@@ -230,6 +306,10 @@ class Finding:
     prompt_version: str | None = None
     supporting_experts: list[ExpertFamily] = field(default_factory=list)
     supporting_models: list[str] = field(default_factory=list)
+    # Assigned only by the decision layer, never by an Expert or aggregator.
+    probability: float | None = None
+    decision_features: dict[str, float] = field(default_factory=dict)
+    evidence_bundle_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -282,6 +362,8 @@ class PipelineResult:
     cancelled: bool = False
     expert_failures: list[Any] = field(default_factory=list)
     analysis_status: str = "completed"
+    evidence_bundles: list[EvidenceBundle] = field(default_factory=list)
+    scored_evidence: list[ScoredEvidenceBundle] = field(default_factory=list)
 
     @property
     def validated_findings(self) -> list[Finding]:

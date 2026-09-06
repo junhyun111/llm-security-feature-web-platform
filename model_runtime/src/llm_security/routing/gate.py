@@ -88,3 +88,39 @@ class CandidateGate:
             rejected_count=count - accepted,
             reduction_rate=(count - accepted) / count if count else 0.0,
         )
+
+    @staticmethod
+    def calibrate(
+        scores: list[float],
+        labels: list[int],
+        *,
+        target_recall: float = 0.95,
+    ) -> GateCalibration:
+        """Select the highest validation threshold meeting candidate recall."""
+
+        if len(scores) != len(labels) or not scores:
+            raise ValueError("scores and labels must be non-empty and equal length")
+        if not 0.0 <= target_recall <= 1.0:
+            raise ValueError("target_recall must be between 0 and 1")
+        pairs = [(float(score), int(label)) for score, label in zip(scores, labels)]
+        positives = sum(label == 1 for _, label in pairs)
+        if positives == 0:
+            raise ValueError("candidate calibration requires at least one positive label")
+        selected_threshold = 0.0
+        achieved_recall = 1.0
+        for threshold in sorted({0.0, *(score for score, _ in pairs)}, reverse=True):
+            recalled = sum(
+                score >= threshold and label == 1 for score, label in pairs
+            ) / positives
+            if recalled >= target_recall:
+                selected_threshold = threshold
+                achieved_recall = recalled
+                break
+        accepted = sum(score >= selected_threshold for score, _ in pairs)
+        return GateCalibration(
+            threshold=selected_threshold,
+            target_recall=target_recall,
+            achieved_recall=achieved_recall,
+            accepted_count=accepted,
+            target_met=achieved_recall >= target_recall,
+        )

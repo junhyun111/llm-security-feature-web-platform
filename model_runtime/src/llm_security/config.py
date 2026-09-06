@@ -60,6 +60,11 @@ class AnalysisConfig:
 @dataclass(slots=True)
 class ValidationConfig:
     minimum_confidence: float = 0.60
+    # These are deployment values exported from validation-set selection. They
+    # are not adjusted from web sensitivity at request time.
+    low_probability_threshold: float = 0.28
+    high_probability_threshold: float = 0.71
+    decision_model_path: str | None = None
     minimum_confidence_by_expert: dict[ExpertFamily, float] = field(
         default_factory=dict
     )
@@ -193,6 +198,16 @@ class AppConfig:
             ),
             validation=ValidationConfig(
                 minimum_confidence=float(values.get("MINIMUM_CONFIDENCE", "0.60")),
+                low_probability_threshold=float(
+                    values.get("DECISION_LOW_THRESHOLD", "0.28")
+                ),
+                high_probability_threshold=float(
+                    values.get("DECISION_HIGH_THRESHOLD", "0.71")
+                ),
+                decision_model_path=_resolve_optional_path(
+                    values.get("DECISION_MODEL_PATH"),
+                    base_directory=env_path.parent,
+                ),
                 minimum_confidence_by_expert={
                     expert: float(values[env_name])
                     for expert, env_name in _VALIDATOR_CONFIDENCE_ENV.items()
@@ -246,6 +261,15 @@ class AppConfig:
             raise ValueError("Candidate Ranker requires ANALYSIS_BACKEND=semantic")
         if not 0.0 <= self.validation.minimum_confidence <= 1.0:
             raise ValueError("MINIMUM_CONFIDENCE must be between 0 and 1")
+        if not (
+            0.0
+            <= self.validation.low_probability_threshold
+            <= self.validation.high_probability_threshold
+            <= 1.0
+        ):
+            raise ValueError(
+                "Decision thresholds must satisfy 0 <= low <= high <= 1"
+            )
         if self.runtime.request_timeout_seconds <= 0:
             raise ValueError("REQUEST_TIMEOUT_SECONDS must be positive")
         if self.runtime.max_retries < 0:

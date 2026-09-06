@@ -1,9 +1,142 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import hashlib
 
 from .cwe import causal_cwe_family
-from .models import Finding
+from .models import Candidate, EvidenceBundle, ExpertEvidence, ExpertFamily, Finding
+
+
+class EvidenceAggregator:
+    """Fuse Expert observations without assigning a probability or verdict."""
+
+    def aggregate(
+        self,
+        evidence: list[ExpertEvidence],
+        candidates: list[Candidate] | dict[str, Candidate],
+    ) -> list[EvidenceBundle]:
+        candidate_by_id = (
+            candidates
+            if isinstance(candidates, dict)
+            else {item.candidate_id: item for item in candidates}
+        )
+        buckets: dict[tuple[str, str], list[ExpertEvidence]] = defaultdict(list)
+        for item in evidence:
+            if item.position == "oppose" or item.candidate_id not in candidate_by_id:
+                continue
+            buckets[(item.candidate_id, item.vulnerability_family)].append(item)
+
+        bundles: list[EvidenceBundle] = []
+        for (candidate_id, family), bucket in buckets.items():
+            candidate = candidate_by_id[candidate_id]
+            for group in self._groups(bucket):
+                bundles.append(self._fuse(candidate, family, group))
+        bundles.sort(
+            key=lambda item: (
+                item.candidate_id,
+                item.vulnerability_family,
+                item.bundle_id,
+            )
+        )
+        return bundles
+
+    @staticmethod
+    def _groups(bucket: list[ExpertEvidence]) -> list[list[ExpertEvidence]]:
+        groups: list[list[ExpertEvidence]] = []
+        for item in bucket:
+            for group in groups:
+                representative = group[0]
+                same_sink = bool(
+                    item.sink
+                    and representative.sink
+                    and _normalize(item.sink) == _normalize(representative.sink)
+                )
+                shared = bool(set(item.evidence_ids) & set(representative.evidence_ids))
+                # Missing sink data is common for partial observations.  It may
+                # join only when evidence overlaps, preventing unrelated flaws in
+                # one candidate from collapsing into a single bundle.
+                if same_sink or shared:
+                    group.append(item)
+                    break
+            else:
+                groups.append([item])
+        return groups
+
+    @staticmethod
+    def _fuse(
+        candidate: Candidate,
+        family: str,
+        group: list[ExpertEvidence],
+    ) -> EvidenceBundle:
+        evidence_ids = sorted(
+            {evidence_id for item in group for evidence_id in item.evidence_ids}
+        )
+        support = [item for item in group if item.position == "support"]
+        unknown = [item for item in group if item.position != "support"]
+        identity = "|".join(
+            [candidate.candidate_id, family, *evidence_ids, *sorted(item.sink or "" for item in group)]
+        )
+        bundle_id = "B-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+        return EvidenceBundle(
+            bundle_id=bundle_id,
+            candidate_id=candidate.candidate_id,
+            file=candidate.file,
+            function=candidate.function,
+            line_start=candidate.line_start,
+            line_end=candidate.line_end,
+            vulnerability_family=family,
+            cwes=sorted({cwe for item in group for cwe in item.cwes}),
+            evidence_ids=evidence_ids,
+            supporting_experts=sorted(
+                {item.expert for item in support}, key=lambda item: item.value
+            ),
+            unknown_experts=sorted(
+                {item.expert for item in unknown}, key=lambda item: item.value
+            ),
+            sources=list(dict.fromkeys(item.source for item in group if item.source)),
+            sinks=list(dict.fromkeys(item.sink for item in group if item.sink)),
+            trigger_paths=[item.trigger_path for item in group if item.trigger_path],
+            preconditions=list(
+                dict.fromkeys(value for item in group for value in item.preconditions)
+            ),
+            expert_confidences=[
+                item.self_confidence
+                for item in group
+                if item.self_confidence is not None
+            ],
+            model_ids=sorted({item.model_id for item in group if item.model_id}),
+            support_count=len(support),
+            unknown_count=len(unknown),
+            total_evidence_references=sum(len(item.evidence_ids) for item in group),
+        )
+
+
+def expert_evidence_from_finding(finding: Finding) -> ExpertEvidence:
+    """Compatibility adapter for stored results and third-party Expert runners."""
+
+    families = {causal_cwe_family(cwe) for cwe in finding.cwes if cwe}
+    family = (
+        next(iter(families))
+        if len(families) == 1
+        else "mixed:" + ",".join(sorted(families))
+        if families
+        else f"unclassified:{finding.expert.value}"
+    )
+    return ExpertEvidence(
+        candidate_id=finding.candidate_id,
+        expert=finding.expert,
+        position=finding.position,
+        vulnerability_family=family,
+        cwes=list(finding.cwes),
+        evidence_ids=list(finding.evidence_ids),
+        source=finding.source,
+        sink=finding.sink,
+        trigger_path=list(finding.trigger_path),
+        preconditions=list(finding.preconditions),
+        self_confidence=finding.confidence,
+        model_id=finding.model_id,
+        prompt_version=finding.prompt_version,
+    )
 
 
 class FindingAggregator:
