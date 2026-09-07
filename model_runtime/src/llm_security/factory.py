@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .aggregation import EvidenceAggregator
-from .decision import CalibratedFindingScorer, DecisionPolicy, TrainedDecisionLayer
+from .decision import DecisionPolicy, MILArtifact, MILDecisionScorer
 from .analysis import LearnedCandidateRanker, SemanticStaticAnalyzer
 from .config import AppConfig
 from .evidence import ContextBuilder
@@ -58,25 +58,29 @@ def build_context_builder(config: AppConfig) -> ContextBuilder:
 
 def build_decision_components(
     config: AppConfig,
-) -> tuple[CalibratedFindingScorer, DecisionPolicy]:
-    if config.validation.decision_model_path:
-        try:
-            artifact = TrainedDecisionLayer.load(config.validation.decision_model_path)
-        except (OSError, ValueError) as exc:
-            raise ValueError(
-                "Cannot load configured calibrated decision artifact: "
-                + config.validation.decision_model_path
-            ) from exc
-        config.validation.low_probability_threshold = artifact.low_threshold
-        config.validation.high_probability_threshold = artifact.high_threshold
-        return artifact.scorer, DecisionPolicy(
-            low_threshold=artifact.low_threshold,
-            high_threshold=artifact.high_threshold,
-        )
-    return CalibratedFindingScorer(), DecisionPolicy(
-        low_threshold=config.validation.low_probability_threshold,
-        high_threshold=config.validation.high_probability_threshold,
+) -> tuple[MILDecisionScorer, DecisionPolicy]:
+    if not config.validation.decision_model_path:
+        raise RuntimeError("Trained MIL decision model required.")
+    try:
+        artifact = MILArtifact.load(config.validation.decision_model_path)
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            "Cannot load configured MIL decision artifact: "
+            + config.validation.decision_model_path
+        ) from exc
+    config.validation.low_probability_threshold = artifact.low_threshold
+    config.validation.high_probability_threshold = artifact.high_threshold
+    return MILDecisionScorer(
+        artifact.model,
+        artifact.calibrator,
+        low_threshold=artifact.low_threshold,
+        high_threshold=artifact.high_threshold,
+    ), DecisionPolicy(
+        low_threshold=artifact.low_threshold,
+        high_threshold=artifact.high_threshold,
     )
+
+
 def build_candidate_analyzer(
     config: AppConfig,
     *,
@@ -116,9 +120,22 @@ def build_candidate_analyzer(
     )
 
 
-def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
+def build_pipeline(
+    config: AppConfig,
+    router: Router,
+    *,
+    collect_decision_features: bool = False,
+) -> VulnerabilityPipeline:
     client = build_openrouter_client(config)
-    scorer, decision_policy = build_decision_components(config)
+    if collect_decision_features:
+        config.configure_decision_feature_collection()
+        scorer = None
+        decision_policy = DecisionPolicy(
+            low_threshold=config.validation.low_probability_threshold,
+            high_threshold=config.validation.high_probability_threshold,
+        )
+    else:
+        scorer, decision_policy = build_decision_components(config)
     analyzer = build_candidate_analyzer(
         config,
         require_ranker=isinstance(router, BudgetedUtilityRouter),
@@ -149,8 +166,9 @@ def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
             threshold=config.candidate_gate.threshold,
         ),
         max_candidates=config.analysis.max_candidates_per_project,
-        scorer=scorer,
+        mil_scorer=scorer,
         decision_policy=decision_policy,
+        collection_only=collect_decision_features,
     )
 
 
@@ -210,7 +228,7 @@ def build_batched_web_pipeline(
             threshold=config.candidate_gate.threshold,
         ),
         max_candidates=config.analysis.max_candidates_per_project,
-        scorer=scorer,
+        mil_scorer=scorer,
         decision_policy=decision_policy,
     )
 
@@ -274,6 +292,6 @@ def build_parallel_web_pipeline(
             threshold=config.candidate_gate.threshold,
         ),
         max_candidates=config.analysis.max_candidates_per_project,
-        scorer=scorer,
+        mil_scorer=scorer,
         decision_policy=decision_policy,
     )

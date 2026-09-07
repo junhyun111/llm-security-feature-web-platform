@@ -364,6 +364,8 @@ class PipelineResult:
     analysis_status: str = "completed"
     evidence_bundles: list[EvidenceBundle] = field(default_factory=list)
     scored_evidence: list[ScoredEvidenceBundle] = field(default_factory=list)
+    case_decision_score: Any | None = None
+    case_decision_input: Any | None = None
 
     @property
     def validated_findings(self) -> list[Finding]:

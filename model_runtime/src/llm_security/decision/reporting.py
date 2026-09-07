@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from ..models import Candidate, Finding, ScoredEvidenceBundle
+from ..models import Candidate, EvidenceBundle, ExpertFamily, Finding, ScoredEvidenceBundle
+from .mil.schema import CaseDecisionScore
 
 
 class FindingReportBuilder:
@@ -48,4 +49,60 @@ class FindingReportBuilder:
             probability=scored.probability,
             decision_features=dict(scored.features),
             evidence_bundle_id=bundle.bundle_id,
+        )
+
+    def build_case(
+        self,
+        score: CaseDecisionScore,
+        candidate: Candidate,
+        bundle: EvidenceBundle | None,
+        *,
+        fallback_expert: ExpertFamily,
+    ) -> Finding:
+        if bundle is not None:
+            legacy = self.build(
+                ScoredEvidenceBundle(
+                    bundle=bundle,
+                    probability=score.probability,
+                    raw_probability=score.raw_probability,
+                    features={},
+                ),
+                candidate,
+            )
+            legacy.decision_features = {
+                "sample_probability": score.probability,
+                "candidate_score": score.candidate_scores.get(
+                    candidate.candidate_id, 0.0
+                ),
+                "candidate_attention": score.candidate_attention.get(
+                    candidate.candidate_id, 0.0
+                ),
+            }
+            return legacy
+        return Finding(
+            finding_id=f"S-{score.sample_id}",
+            candidate_id=candidate.candidate_id,
+            expert=fallback_expert,
+            title="근거가 부족한 잠재적 취약점",
+            root_cause="MIL이 후보를 선택했지만 검증 가능한 evidence bundle이 없습니다.",
+            consequence="추가 정적 분석 또는 전문가 검토가 필요합니다.",
+            file=candidate.file,
+            function=candidate.function,
+            line_start=candidate.line_start,
+            line_end=candidate.line_end,
+            cwes=[],
+            source=None,
+            sink=None,
+            missing_guard=None,
+            trigger_path=[],
+            evidence_ids=[],
+            confidence=score.probability,
+            position="unknown",
+            probability=score.probability,
+            decision_features={
+                "sample_probability": score.probability,
+                "candidate_score": score.candidate_scores.get(
+                    candidate.candidate_id, 0.0
+                ),
+            },
         )

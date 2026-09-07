@@ -951,6 +951,11 @@ class WebJobService:
                     or source_warnings
                 ),
             },
+            "case_decision_score": (
+                to_dict(result.case_decision_score)
+                if result.case_decision_score is not None
+                else None
+            ),
             "findings": bundles,
             "routes": [to_dict(item) for item in result.routes],
             "structural_validations": [

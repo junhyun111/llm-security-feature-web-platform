@@ -2,32 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import numpy as np
-from sklearn.linear_model import LogisticRegression
-
-
-class PlattCalibrator:
-    """One-dimensional Platt scaling fitted on a validation split only."""
-
-    def __init__(self) -> None:
-        self.model = LogisticRegression(C=1e6, solver="lbfgs")
-
-    def fit(
-        self, raw_probabilities: Sequence[float], labels: Sequence[int]
-    ) -> "PlattCalibrator":
-        probabilities = np.asarray(raw_probabilities, dtype=float).reshape(-1, 1)
-        targets = np.asarray(labels, dtype=int)
-        if probabilities.shape[0] != targets.shape[0] or probabilities.shape[0] < 2:
-            raise ValueError("Calibration probabilities and labels must have equal length >= 2")
-        if np.unique(targets).size != 2:
-            raise ValueError("Platt calibration requires both label classes")
-        self.model.fit(probabilities, targets)
-        return self
-
-    def transform(self, raw_probabilities: Sequence[float]) -> np.ndarray:
-        values = np.asarray(raw_probabilities, dtype=float).reshape(-1, 1)
-        return self.model.predict_proba(values)[:, 1]
-
 
 def select_high_threshold(
     probabilities: Sequence[float],

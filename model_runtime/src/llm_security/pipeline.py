@@ -1,19 +1,21 @@
 from __future__ import annotations
 
+from typing import Any
+
 from .aggregation import EvidenceAggregator, FindingAggregator, expert_evidence_from_finding
 from .analysis import CandidateAnalyzer
 from .decision import (
-    CalibratedFindingScorer,
+    DecisionInputBuilder,
     DecisionPolicy,
-    EvidenceFeatureBuilder,
     FindingReportBuilder,
+    MILDecisionScorer,
 )
 from .experts import ExpertRunner
 from .models import (
     ExpertEvidence,
+    ExpertFamily,
     PipelineResult,
     ProjectCase,
-    ScoredEvidenceBundle,
     ValidationResult,
     ValidationVerdict,
 )
@@ -36,36 +38,41 @@ class VulnerabilityPipeline:
         validator: EvidenceValidator,
         candidate_gate: CandidateGate | None = None,
         max_candidates: int | None = None,
-        feature_builder: EvidenceFeatureBuilder | None = None,
-        scorer: CalibratedFindingScorer | None = None,
+        mil_scorer: MILDecisionScorer | None = None,
         decision_policy: DecisionPolicy | None = None,
+        decision_input_builder: DecisionInputBuilder | None = None,
         falsifier: EvidenceFalsifier | None = None,
         report_builder: FindingReportBuilder | None = None,
         structural_validator: ExpertEvidenceStructuralValidator | None = None,
+        # Older callers may still pass this keyword. It is never used by the
+        # production EvidenceAggregator path.
+        scorer: Any | None = None,
+        collection_only: bool = False,
     ) -> None:
         self.analyzer = analyzer
         self.router = router
         self.expert_runner = expert_runner
-        # Keep accepting FindingAggregator on the public constructor while the
-        # live path now fuses pre-decision evidence bundles.
-        self._legacy_aggregator_api = isinstance(aggregator, FindingAggregator)
+        self._legacy_aggregator = (
+            aggregator if isinstance(aggregator, FindingAggregator) else None
+        )
         self.aggregator = (
             aggregator if isinstance(aggregator, EvidenceAggregator) else EvidenceAggregator()
         )
+        if self._legacy_aggregator is None and mil_scorer is None and not collection_only:
+            raise RuntimeError("Trained MIL decision model required.")
         self.validator = validator
         self.candidate_gate = candidate_gate or CandidateGate(enabled=False)
         self.max_candidates = max_candidates
-        self.feature_builder = feature_builder or EvidenceFeatureBuilder()
-        self.scorer = scorer or CalibratedFindingScorer()
+        self.mil_scorer = mil_scorer
+        self.collection_only = collection_only
         self.decision_policy = decision_policy or DecisionPolicy()
+        self.decision_input_builder = decision_input_builder or DecisionInputBuilder()
         self.falsifier = falsifier or EvidenceFalsifier(
             client=getattr(validator, "client", None),
             model=getattr(validator, "model", None),
         )
         self.report_builder = report_builder or FindingReportBuilder()
-        self.structural_validator = (
-            structural_validator or ExpertEvidenceStructuralValidator()
-        )
+        self.structural_validator = structural_validator or ExpertEvidenceStructuralValidator()
 
     def run(self, case: ProjectCase) -> PipelineResult:
         pre_gate_candidates = self.analyzer.analyze(case)
@@ -82,111 +89,259 @@ class VulnerabilityPipeline:
             candidates = candidates[: self.max_candidates]
         routes = [self.router.route(candidate) for candidate in candidates]
         expert_output = self.expert_runner.run(candidates, routes)
-        candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
-        route_by_id = {route.candidate_id: route for route in routes}
+        if self._legacy_aggregator is not None:
+            return self._run_legacy(
+                case,
+                pre_gate_candidates,
+                candidates,
+                gate_decisions,
+                routes,
+                expert_output,
+            )
+        return self._run_mil(
+            case,
+            pre_gate_candidates,
+            candidates,
+            gate_decisions,
+            routes,
+            expert_output,
+        )
 
-        native_evidence = list(getattr(expert_output, "evidence", []) or [])
-        expert_evidence: list[ExpertEvidence] = []
-        structural_validations: list[ValidationResult] = []
-        valid_legacy = []
-        for finding in list(getattr(expert_output, "findings", []) or []):
-            candidate = candidate_by_id.get(finding.candidate_id)
-            if candidate is None:
-                preliminary = ValidationResult(
-                    finding_id=finding.finding_id,
-                    verdict=ValidationVerdict.REJECTED,
-                    confidence=None,
-                    checks={
-                        "file_matches": False,
-                        "function_matches": False,
-                        "line_reachable": False,
-                        "evidence_exists": bool(finding.evidence_ids),
-                        "evidence_ids_valid": False,
-                    },
-                    reasons=["Finding이 존재하지 않는 candidate를 참조합니다."],
-                )
-            else:
-                preliminary = self.validator.validate_structure(finding, candidate)
-            structural_validations.append(preliminary)
-            if preliminary.verdict != ValidationVerdict.REJECTED:
-                valid_legacy.append(finding)
-                expert_evidence.append(expert_evidence_from_finding(finding))
-
-        for index, item in enumerate(native_evidence, start=1):
+    def _run_mil(
+        self,
+        case,
+        pre_gate_candidates,
+        candidates,
+        gate_decisions,
+        routes,
+        expert_output,
+    ) -> PipelineResult:
+        candidate_by_id = {item.candidate_id: item for item in candidates}
+        evidence: list[ExpertEvidence] = []
+        structural: list[ValidationResult] = []
+        for index, item in enumerate(
+            list(getattr(expert_output, "evidence", []) or []), start=1
+        ):
             result = self.structural_validator.validate(
                 item,
                 candidate_by_id.get(item.candidate_id),
                 identifier=f"EV-{item.candidate_id}-{index}",
             )
-            structural_validations.append(result)
+            structural.append(result)
             if result.verdict != ValidationVerdict.REJECTED:
-                expert_evidence.append(item)
-
-        bundles = self.aggregator.aggregate(expert_evidence, candidate_by_id)
-        self._preserve_single_legacy_ids(bundles, valid_legacy)
-        scored: list[ScoredEvidenceBundle] = []
-        for bundle in bundles:
-            candidate = candidate_by_id[bundle.candidate_id]
-            route = route_by_id[bundle.candidate_id]
-            features = self.feature_builder.build(bundle, candidate, route, expert_output)
-            raw_probability, probability = self.scorer.score_with_raw(features)
-            scored.append(
-                ScoredEvidenceBundle(
-                    bundle=bundle,
-                    probability=probability,
-                    raw_probability=raw_probability,
-                    features=features,
+                evidence.append(item)
+        # Stored/custom runners on the old carrier remain readable, but are
+        # converted before fusion and never scored as Findings.
+        for item in list(getattr(expert_output, "findings", []) or []):
+            candidate = candidate_by_id.get(item.candidate_id)
+            result = (
+                self.validator.validate_structure(item, candidate)
+                if candidate is not None
+                else ValidationResult(
+                    item.finding_id,
+                    ValidationVerdict.REJECTED,
+                    None,
+                    {"candidate_exists": False},
+                    ["Finding references an unknown candidate."],
                 )
             )
+            structural.append(result)
+            if result.verdict != ValidationVerdict.REJECTED:
+                evidence.append(expert_evidence_from_finding(item))
 
-        findings = [
-            self.report_builder.build(item, candidate_by_id[item.bundle.candidate_id])
-            for item in scored
-        ]
-        validations = self.decision_policy.decide(scored)
-        if self._legacy_aggregator_api:
-            # Old embedders treated ValidationResult.confidence=None as the
-            # marker for a deterministic verdict. The calibrated probability is
-            # still available on Finding and ScoredEvidenceBundle.
-            for validation in validations:
-                validation.confidence = None
-        validation_by_id = {item.finding_id: item for item in validations}
+        bundles = self.aggregator.aggregate(evidence, candidate_by_id)
+        decision_input = self.decision_input_builder.build(
+            sample_id=case.case_id,
+            candidates=candidates,
+            routes=routes,
+            bundles=bundles,
+            expert_output=expert_output,
+            label=_case_label(case),
+            project_id=case.project_id,
+            cve_id=str(case.metadata.get("cve_id", "")) or None,
+        )
+        if self.collection_only:
+            return self._result(
+                case,
+                pre_gate_candidates,
+                candidates,
+                gate_decisions,
+                routes,
+                expert_output,
+                findings=[],
+                validations=[],
+                usage=list(expert_output.usage),
+                structural=structural,
+                bundles=bundles,
+                case_score=None,
+                decision_input=decision_input,
+            )
+        case_score = self.mil_scorer.score(decision_input)  # type: ignore[union-attr]
+        findings = []
+        validations = []
         usage = list(expert_output.usage)
-        for finding in findings:
-            preliminary = validation_by_id[finding.finding_id]
-            if preliminary.verdict != ValidationVerdict.UNCERTAIN:
-                continue
-            candidate = candidate_by_id[finding.candidate_id]
-            below_low = bool(preliminary.checks.get("below_low_threshold"))
-            # The low band accepts deterministic proof but does not spend a
-            # second LLM call on evidence-poor hypotheses.
-            active_falsifier = EvidenceFalsifier() if below_low else self.falsifier
-            try:
-                falsification, falsifier_usage = active_falsifier.run(finding, candidate)
-                if falsifier_usage is not None:
-                    usage.append(falsifier_usage)
-                preliminary.reasons.append(falsification.reason)
-                preliminary.model_used = falsification.model_used
-                if falsification.falsified:
-                    preliminary.verdict = ValidationVerdict.REJECTED
-                    finding.evidence_against = [
-                        f"{item.file}:{item.line}: {item.expression}"
-                        for item in falsification.counter_evidence
-                    ]
-            except Exception as error:
-                preliminary.failed = True
-                preliminary.reasons.append(
-                    "반증 검증을 완료하지 못해 검토 상태로 유지했습니다: " + str(error)[:300]
+        if case_score.top_candidate_id is not None:
+            candidate = candidate_by_id[case_score.top_candidate_id]
+            bundle = next(
+                (
+                    item
+                    for item in bundles
+                    if item.bundle_id == case_score.top_bundle_id
+                ),
+                None,
+            )
+            route = next(item for item in routes if item.candidate_id == candidate.candidate_id)
+            fallback_expert = next(
+                iter(route.selected or list(route.scores)),
+                ExpertFamily.CONTROL_STATE_ERROR,
+            )
+            finding = self.report_builder.build_case(
+                case_score,
+                candidate,
+                bundle,
+                fallback_expert=fallback_expert,
+            )
+            evidence_survives = bool(
+                bundle
+                and bundle.support_count > 0
+                and bundle.evidence_ids
+                and set(bundle.evidence_ids).issubset(
+                    {item.evidence_id for item in candidate.evidence}
                 )
+            )
+            deterministic, _ = EvidenceFalsifier().run(finding, candidate)
+            llm_falsified = False
+            falsifier_failed = False
+            falsification_reason = deterministic.reason
+            if deterministic.falsified:
+                finding.evidence_against = [
+                    f"{item.file}:{item.line}: {item.expression}"
+                    for item in deterministic.counter_evidence
+                ]
+            elif (
+                evidence_survives
+                and case_score.probability >= self.mil_scorer.low_threshold  # type: ignore[union-attr]
+                and bool(getattr(self.validator, "use_llm_for_uncertain", True))
+                and self.falsifier.client is not None
+                and self.falsifier.model
+            ):
+                try:
+                    falsification, llm_usage = self.falsifier.run(finding, candidate)
+                    if llm_usage is not None:
+                        usage.append(llm_usage)
+                    llm_falsified = falsification.falsified
+                    falsification_reason = falsification.reason
+                    if llm_falsified:
+                        finding.evidence_against = [
+                            f"{item.file}:{item.line}: {item.expression}"
+                            for item in falsification.counter_evidence
+                        ]
+                except Exception as error:
+                    falsifier_failed = True
+                    falsification_reason = "Falsifier failed: " + str(error)[:300]
+            validation = self.decision_policy.decide_case(
+                case_score,
+                finding_id=finding.finding_id,
+                evidence_survives=evidence_survives,
+                deterministic_counterproof=deterministic.falsified,
+                llm_falsified=llm_falsified,
+                falsifier_failed=falsifier_failed,
+            )
+            validation.reasons.append(falsification_reason)
+            findings.append(finding)
+            validations.append(validation)
+        return self._result(
+            case,
+            pre_gate_candidates,
+            candidates,
+            gate_decisions,
+            routes,
+            expert_output,
+            findings=findings,
+            validations=validations,
+            usage=usage,
+            structural=structural,
+            bundles=bundles,
+            case_score=case_score,
+            decision_input=decision_input,
+        )
 
-        failed_expert_tasks = getattr(expert_output, "failed_task_count", 0)
-        validation_failed = any(item.failed for item in validations)
+    def _run_legacy(
+        self,
+        case,
+        pre_gate_candidates,
+        candidates,
+        gate_decisions,
+        routes,
+        expert_output,
+    ) -> PipelineResult:
+        candidate_by_id = {item.candidate_id: item for item in candidates}
+        structural: list[ValidationResult] = []
+        valid = []
+        for finding in list(getattr(expert_output, "findings", []) or []):
+            candidate = candidate_by_id.get(finding.candidate_id)
+            result = (
+                self.validator.validate_structure(finding, candidate)
+                if candidate is not None
+                else ValidationResult(
+                    finding.finding_id,
+                    ValidationVerdict.REJECTED,
+                    None,
+                    {"candidate_exists": False},
+                    ["Finding references an unknown candidate."],
+                )
+            )
+            structural.append(result)
+            if result.verdict != ValidationVerdict.REJECTED:
+                valid.append(finding)
+        findings = self._legacy_aggregator.aggregate(valid)
+        validations, validator_usage = self.validator.validate_all(findings, candidates)
+        return self._result(
+            case,
+            pre_gate_candidates,
+            candidates,
+            gate_decisions,
+            routes,
+            expert_output,
+            findings=findings,
+            validations=validations,
+            usage=list(expert_output.usage) + validator_usage,
+            structural=structural,
+            bundles=[],
+            case_score=None,
+            decision_input=None,
+        )
+
+    def _result(
+        self,
+        case,
+        pre_gate_candidates,
+        candidates,
+        gate_decisions,
+        routes,
+        expert_output,
+        *,
+        findings,
+        validations,
+        usage,
+        structural,
+        bundles,
+        case_score,
+        decision_input,
+    ) -> PipelineResult:
+        failed_tasks = getattr(expert_output, "failed_task_count", 0)
         cancelled = getattr(expert_output, "cancelled", False)
-        analysis_status = (
+        incomplete_candidates = getattr(
+            expert_output, "incomplete_candidate_count", 0
+        )
+        covered_candidates = getattr(expert_output, "covered_candidate_count", 0)
+        if not covered_candidates and getattr(expert_output, "completed_task_count", 0):
+            covered_candidates = max(0, len(candidates) - incomplete_candidates)
+        status = (
             "cancelled"
             if cancelled
             else "partial_failure"
-            if failed_expert_tasks or validation_failed or expert_output.errors
+            if failed_tasks or any(item.failed for item in validations) or expert_output.errors
             else "completed"
         )
         return PipelineResult(
@@ -196,7 +351,7 @@ class VulnerabilityPipeline:
             findings=findings,
             validations=validations,
             usage=usage,
-            structural_validations=structural_validations,
+            structural_validations=structural,
             pre_gate_candidates=pre_gate_candidates,
             gate_decisions=gate_decisions,
             errors=expert_output.errors,
@@ -205,34 +360,26 @@ class VulnerabilityPipeline:
             completed_expert_task_count=getattr(
                 expert_output, "completed_task_count", expert_output.submitted_task_count
             ),
-            failed_expert_task_count=failed_expert_tasks,
-            incomplete_candidate_count=getattr(expert_output, "incomplete_candidate_count", 0),
+            failed_expert_task_count=failed_tasks,
+            incomplete_candidate_count=incomplete_candidates,
             skipped_expert_task_count=expert_output.skipped_task_count,
             recovered_expert_task_count=getattr(expert_output, "recovered_task_count", 0),
             timed_out_expert_task_count=getattr(expert_output, "timed_out_task_count", 0),
-            covered_candidate_count=getattr(
-                expert_output,
-                "covered_candidate_count",
-                len(candidates) - getattr(expert_output, "incomplete_candidate_count", 0),
-            ),
+            covered_candidate_count=covered_candidates,
             cancelled=cancelled,
             expert_failures=getattr(expert_output, "failures", []),
-            analysis_status=analysis_status,
+            analysis_status=status,
             evidence_bundles=bundles,
-            scored_evidence=scored,
+            scored_evidence=[],
+            case_decision_score=case_score,
+            case_decision_input=decision_input,
         )
 
-    @staticmethod
-    def _preserve_single_legacy_ids(bundles, findings) -> None:
-        """Keep persisted/UI identifiers stable for one-to-one legacy reports."""
 
-        for bundle in bundles:
-            matches = [
-                item
-                for item in findings
-                if item.candidate_id == bundle.candidate_id
-                and set(item.evidence_ids) == set(bundle.evidence_ids)
-                and (not item.sink or item.sink in bundle.sinks)
-            ]
-            if len(matches) == 1:
-                bundle.bundle_id = matches[0].finding_id
+def _case_label(case: ProjectCase) -> int | None:
+    if case.split == "unlabeled":
+        return None
+    if "label" in case.metadata:
+        value = int(case.metadata["label"])
+        return value if value in {0, 1} else None
+    return int(bool(case.ground_truth))

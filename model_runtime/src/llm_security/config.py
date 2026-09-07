@@ -93,6 +93,12 @@ class AppConfig:
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
 
+    def configure_decision_feature_collection(self) -> None:
+        """Preserve positive bags while collecting nested MIL inputs."""
+
+        self.candidate_gate.enabled = False
+        self.analysis.max_candidates_per_project = 4
+
     @classmethod
     def from_env(cls, path: str | Path = ".env") -> "AppConfig":
         env_path = Path(path).resolve()

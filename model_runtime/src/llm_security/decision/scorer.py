@@ -1,73 +1,34 @@
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
+import torch
+
 from .features import DECISION_FEATURE_NAMES
-
-
-DEFAULT_WEIGHTS: dict[str, float] = {
-    "candidate_score": 1.40,
-    "router_top1": 0.25,
-    "router_margin": 0.15,
-    "support_expert_count": 0.35,
-    "unknown_expert_count": -0.30,
-    "expert_coverage": 0.40,
-    "unique_evidence_count": 0.25,
-    "evidence_diversity": 0.35,
-    "source_present": 0.20,
-    "sink_present": 0.25,
-    "source_sink_path": 0.90,
-    "trigger_path_length": 0.05,
-    "precondition_count": 0.08,
-    "precondition_supported": 0.25,
-    "cwe_semantic_support": 0.50,
-    "guard_present": -1.60,
-    "counter_evidence_count": -2.00,
-    "max_expert_confidence": 0.10,
-    "mean_expert_confidence": 0.15,
-    "expert_agreement": 0.35,
-    "failure_ratio": -0.80,
-}
-
-
-@dataclass(slots=True)
-class LinearProbabilityClassifier:
-    """Auditable logistic fallback used until a trained artifact is supplied."""
-
-    weights: Mapping[str, float]
-    intercept: float = -2.2
-
-    def predict_probability(self, features: Mapping[str, float]) -> float:
-        logit = self.intercept + sum(
-            float(self.weights.get(name, 0.0)) * float(features.get(name, 0.0))
-            for name in DECISION_FEATURE_NAMES
-        )
-        if logit >= 0:
-            return 1.0 / (1.0 + math.exp(-logit))
-        exponential = math.exp(logit)
-        return exponential / (1.0 + exponential)
-
-
-class IdentityCalibrator:
-    def transform(self, probabilities: Sequence[float]) -> list[float]:
-        return [float(value) for value in probabilities]
+from .mil.calibration import PlattCalibrator
+from .mil.model import HierarchicalMIL
+from .mil.schema import CaseDecisionInput, CaseDecisionScore
 
 
 class CalibratedFindingScorer:
-    """Classifier plus an independently fitted probability calibrator."""
+    """Legacy explicit bundle scorer; never constructed as a fallback.
+
+    This adapter remains only for reading older experiments. Both classifier and
+    calibrator are mandatory, so production cannot silently use hand weights.
+    """
 
     def __init__(
         self,
-        classifier: Any | None = None,
-        calibrator: Any | None = None,
+        classifier: Any,
+        calibrator: Any,
         *,
         feature_names: Sequence[str] = DECISION_FEATURE_NAMES,
     ) -> None:
-        self.classifier = classifier or LinearProbabilityClassifier(DEFAULT_WEIGHTS)
-        self.calibrator = calibrator or IdentityCalibrator()
+        if classifier is None or calibrator is None:
+            raise RuntimeError("A trained classifier and calibrator are required")
+        self.classifier = classifier
+        self.calibrator = calibrator
         self.feature_names = tuple(feature_names)
 
     def score(self, features: Mapping[str, float]) -> float:
@@ -78,19 +39,72 @@ class CalibratedFindingScorer:
 
     def score_with_raw(self, features: Mapping[str, float]) -> tuple[float, float]:
         vector = [[float(features.get(name, 0.0)) for name in self.feature_names]]
-        if hasattr(self.classifier, "predict_probability"):
-            raw = float(self.classifier.predict_probability(features))
-        else:
-            raw = float(self.classifier.predict_proba(vector)[0][1])
-
+        raw = float(self.classifier.predict_proba(vector)[0][1])
         if hasattr(self.calibrator, "transform"):
             calibrated = float(self.calibrator.transform([raw])[0])
-        elif hasattr(self.calibrator, "predict_proba"):
-            calibrated = float(self.calibrator.predict_proba([[raw]])[0][1])
         else:
-            calibrated = raw
-        return self._bounded(raw), self._bounded(calibrated)
+            calibrated = float(self.calibrator.predict_proba([[raw]])[0][1])
+        return _bounded(raw), _bounded(calibrated)
 
-    @staticmethod
-    def _bounded(value: float) -> float:
-        return max(0.0, min(1.0, value))
+
+class MILDecisionScorer:
+    """Produce exactly one calibrated probability for a complete sample."""
+
+    def __init__(
+        self,
+        model: HierarchicalMIL,
+        calibrator: PlattCalibrator,
+        *,
+        low_threshold: float,
+        high_threshold: float,
+    ) -> None:
+        if not 0.0 <= low_threshold <= high_threshold <= 1.0:
+            raise ValueError("thresholds must satisfy 0 <= low <= high <= 1")
+        self.model = model
+        self.calibrator = calibrator
+        self.low_threshold = low_threshold
+        self.high_threshold = high_threshold
+
+    def score(self, case: CaseDecisionInput) -> CaseDecisionScore:
+        self.model.eval()
+        with torch.no_grad():
+            output = self.model(case)
+            raw = float(torch.sigmoid(output.sample_logit).item())
+        probability = _bounded(float(self.calibrator.transform([raw])[0]))
+        candidate_scores = {
+            candidate.candidate_id: float(torch.sigmoid(logit).item())
+            for candidate, logit in zip(case.candidates, output.candidate_logits)
+        }
+        candidate_attention = {
+            candidate.candidate_id: float(weight.item())
+            for candidate, weight in zip(case.candidates, output.candidate_attention)
+        }
+        bundle_attention = {
+            candidate.candidate_id: {
+                bundle.bundle_id: float(weight.item())
+                for bundle, weight in zip(candidate.bundles, weights)
+            }
+            for candidate, weights in zip(case.candidates, output.bundle_attention)
+        }
+        top_candidate_id = (
+            max(candidate_scores, key=candidate_scores.get) if candidate_scores else None
+        )
+        top_bundle_id = None
+        if top_candidate_id is not None:
+            weights = bundle_attention.get(top_candidate_id, {})
+            if weights:
+                top_bundle_id = max(weights, key=weights.get)
+        return CaseDecisionScore(
+            sample_id=case.sample_id,
+            raw_probability=raw,
+            probability=probability,
+            candidate_scores=candidate_scores,
+            candidate_attention=candidate_attention,
+            bundle_attention=bundle_attention,
+            top_candidate_id=top_candidate_id,
+            top_bundle_id=top_bundle_id,
+        )
+
+
+def _bounded(value: float) -> float:
+    return max(0.0, min(1.0, value))
