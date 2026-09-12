@@ -8,7 +8,7 @@ from ...models import Candidate, EvidenceBundle, RouteDecision
 from ..features import DECISION_FEATURE_NAMES, EvidenceFeatureBuilder
 
 
-MIL_FAMILIES: tuple[str, ...] = (
+EXPERT_FAMILIES: tuple[str, ...] = (
     "memory_safety",
     "integer_size_type",
     "taint_api_contract",
@@ -39,7 +39,7 @@ class BundleDecisionInput:
         family = _mil_family(self.family)
         return [
             *(float(self.features.get(name, 0.0)) for name in DECISION_FEATURE_NAMES),
-            *(1.0 if name == family else 0.0 for name in MIL_FAMILIES),
+            *(1.0 if name == family else 0.0 for name in EXPERT_FAMILIES),
         ]
 
 
@@ -48,16 +48,16 @@ class CandidateDecisionInput:
     candidate_id: str
     features: dict[str, float]
     bundles: list[BundleDecisionInput] = field(default_factory=list)
+    label: int | None = None
 
     def vector(self) -> list[float]:
         return [float(self.features.get(name, 0.0)) for name in CANDIDATE_FEATURE_NAMES]
 
 
 @dataclass(slots=True)
-class CaseDecisionInput:
-    sample_id: str
+class CandidateDecisionContext:
+    case_id: str
     candidates: list[CandidateDecisionInput]
-    label: int | None = None
     project_id: str | None = None
     cve_id: str | None = None
 
@@ -65,10 +65,9 @@ class CaseDecisionInput:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "CaseDecisionInput":
+    def from_dict(cls, value: dict[str, Any]) -> "CandidateDecisionContext":
         return cls(
-            sample_id=str(value["sample_id"]),
-            label=None if value.get("label") is None else int(value["label"]),
+            case_id=str(value["case_id"]),
             project_id=value.get("project_id"),
             cve_id=value.get("cve_id"),
             candidates=[
@@ -78,6 +77,11 @@ class CaseDecisionInput:
                         str(key): float(item)
                         for key, item in candidate.get("features", {}).items()
                     },
+                    label=(
+                        None
+                        if candidate.get("label") is None
+                        else int(candidate["label"])
+                    ),
                     bundles=[
                         BundleDecisionInput(
                             bundle_id=str(bundle["bundle_id"]),
@@ -96,15 +100,12 @@ class CaseDecisionInput:
 
 
 @dataclass(slots=True)
-class CaseDecisionScore:
-    sample_id: str
-    raw_probability: float
-    probability: float
-    candidate_scores: dict[str, float]
+class CandidateDecisionOutput:
+    case_id: str
+    candidate_probabilities: dict[str, float]
+    project_probability: float
     candidate_attention: dict[str, float]
     bundle_attention: dict[str, dict[str, float]]
-    top_candidate_id: str | None
-    top_bundle_id: str | None
 
 
 class DecisionInputBuilder:
@@ -116,15 +117,15 @@ class DecisionInputBuilder:
     def build(
         self,
         *,
-        sample_id: str,
+        case_id: str,
         candidates: list[Candidate],
         routes: list[RouteDecision],
         bundles: list[EvidenceBundle],
         expert_output: Any,
-        label: int | None = None,
+        candidate_labels: dict[str, int] | None = None,
         project_id: str | None = None,
         cve_id: str | None = None,
-    ) -> CaseDecisionInput:
+    ) -> CandidateDecisionContext:
         route_by_id = {route.candidate_id: route for route in routes}
         bundles_by_candidate: dict[str, list[EvidenceBundle]] = {}
         for bundle in bundles:
@@ -172,12 +173,12 @@ class DecisionInputBuilder:
                         "expert_failure_ratio": float(failure_ratio),
                     },
                     bundles=encoded_bundles,
+                    label=(candidate_labels or {}).get(candidate.candidate_id),
                 )
             )
-        return CaseDecisionInput(
-            sample_id=sample_id,
+        return CandidateDecisionContext(
+            case_id=case_id,
             candidates=result,
-            label=label,
             project_id=project_id,
             cve_id=cve_id,
         )
@@ -203,7 +204,7 @@ def _mil_family(value: str) -> str:
     normalized = value.lower()
     if normalized in {"memory_bounds", "lifetime_resource", "memory_safety"}:
         return "memory_safety"
-    for family in MIL_FAMILIES:
+    for family in EXPERT_FAMILIES:
         if normalized == family:
             return family
     return "control_state_error"

@@ -297,7 +297,6 @@ class EvidenceValidator:
         model: str | None = None,
         strong_model: str | None = None,
         use_llm_for_uncertain: bool = True,
-        falsify_all_supported: bool = False,
         minimum_confidence_by_expert: Mapping[ExpertFamily | str, float] | None = None,
     ) -> None:
         if not 0.0 <= minimum_confidence <= 1.0:
@@ -316,9 +315,6 @@ class EvidenceValidator:
         self.model = model
         self.strong_model = strong_model
         self.use_llm_for_uncertain = use_llm_for_uncertain
-        # Retained only so existing callers/configuration files remain readable.
-        # Validation is deliberately selective regardless of this legacy flag.
-        self.falsify_all_supported = falsify_all_supported
 
     def validate_all(
         self,

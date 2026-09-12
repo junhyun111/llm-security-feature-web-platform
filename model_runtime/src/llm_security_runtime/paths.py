@@ -74,7 +74,6 @@ def configure_process_environment(paths: RuntimePaths) -> None:
     if paths.env_file.is_file():
         for key, value in _read_env_file(paths.env_file).items():
             os.environ.setdefault(key, value)
-    os.environ["ANALYSIS_BACKEND"] = "semantic"
     os.environ["CANDIDATE_RANKER_PATH"] = str(paths.candidate_ranker_artifact)
     os.environ["CANDIDATE_RANKER_REQUIRED"] = "true"
     os.environ["DECISION_MODEL_PATH"] = str(paths.decision_artifact)

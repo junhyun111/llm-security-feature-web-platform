@@ -493,8 +493,6 @@ class BudgetedUtilityRouter:
     def evaluate_baselines(
         self,
         samples: Iterable[UtilitySample],
-        *,
-        anchor_router=None,
     ) -> dict[str, UtilityRouterMetrics]:
         groups = _group_samples(samples)
         if not groups:
@@ -552,29 +550,6 @@ class BudgetedUtilityRouter:
             pair = self.best_fixed_pair_assignment_ids
             report["best_fixed2"] = self._evaluate_groups(
                 groups, lambda rows: list(pair)
-            )
-        if anchor_router is not None:
-            def anchor_selection(rows: list[UtilitySample]) -> list[str]:
-                ranked = self._rank(rows[0].candidate)
-                by_family = {
-                    self.assignments[item].expert: item
-                    for item in ranked.ranked_assignment_ids
-                }
-                legacy = anchor_router.route(rows[0].candidate).selected
-                mapped = [
-                    ExpertFamily.MEMORY_SAFETY
-                    if family == ExpertFamily.LIFETIME_RESOURCE
-                    else family
-                    for family in legacy
-                ]
-                return [
-                    by_family[family]
-                    for family in dict.fromkeys(mapped)
-                    if family in by_family
-                ]
-
-            report["anchor_rare"] = self._evaluate_groups(
-                groups, anchor_selection
             )
         return report
 

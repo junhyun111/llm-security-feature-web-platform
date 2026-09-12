@@ -9,8 +9,8 @@ class ExpertFamily(str, Enum):
     MEMORY_BOUNDS = "memory_bounds"
     # The Utility Router treats the historical ``memory_bounds`` identifier as
     # the broader E1 Memory Safety Expert.  Keeping the serialized value makes
-    # old ARVO rows and AnchorRare artifacts readable while E1 also covers the
-    # former lifetime/resource checks.
+    # historical dataset rows readable while E1 also covers the former
+    # lifetime/resource checks.
     MEMORY_SAFETY = "memory_bounds"
     LIFETIME_RESOURCE = "lifetime_resource"
     INTEGER_SIZE_TYPE = "integer_size_type"
@@ -250,14 +250,6 @@ class EvidenceBundle:
 
 
 @dataclass(slots=True)
-class ScoredEvidenceBundle:
-    bundle: EvidenceBundle
-    probability: float
-    features: dict[str, float]
-    raw_probability: float | None = None
-
-
-@dataclass(slots=True)
 class CounterEvidence:
     evidence_id: str
     file: str
@@ -328,26 +320,6 @@ class ValidationResult:
 
 
 @dataclass(slots=True)
-class RecallStageTrace:
-    stage: str
-    retained_truth_count: int
-    ground_truth_count: int
-    recall: float
-    retained_truth_ids: list[str] = field(default_factory=list)
-    dropped_truth_ids: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class PipelineRecallTrace:
-    """Ground-truth survival through each lossy pipeline stage."""
-
-    ground_truth_count: int
-    stages: list[RecallStageTrace] = field(default_factory=list)
-    top_k_candidate_recall: dict[int, float] = field(default_factory=dict)
-    validator_verdict_truth_ids: dict[str, list[str]] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
 class UsageRecord:
     model: str
     provider: str | None = None
@@ -367,9 +339,8 @@ class PipelineResult:
     validations: list[ValidationResult]
     usage: list[UsageRecord]
     structural_validations: list[ValidationResult] = field(default_factory=list)
-    pre_gate_candidates: list[Candidate] = field(default_factory=list)
-    post_gate_candidates: list[Candidate] = field(default_factory=list)
-    gate_decisions: list[Any] = field(default_factory=list)
+    generated_candidate_count: int = 0
+    selection_decisions: list[Any] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     expert_task_count: int = 0
     submitted_expert_task_count: int = 0
@@ -384,10 +355,8 @@ class PipelineResult:
     expert_failures: list[Any] = field(default_factory=list)
     analysis_status: str = "completed"
     evidence_bundles: list[EvidenceBundle] = field(default_factory=list)
-    scored_evidence: list[ScoredEvidenceBundle] = field(default_factory=list)
-    case_decision_score: Any | None = None
-    case_decision_input: Any | None = None
-    recall_trace: PipelineRecallTrace | None = None
+    candidate_decision_output: Any | None = None
+    candidate_decision_input: Any | None = None
 
     @property
     def validated_findings(self) -> list[Finding]:

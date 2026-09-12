@@ -5,43 +5,43 @@ from dataclasses import dataclass
 
 import torch
 
-from ..calibration import select_high_threshold
-from .artifact import MILArtifact
+from ..calibration import select_validation_threshold
+from .artifact import CandidateDecisionArtifact
 from .calibration import PlattCalibrator
-from .losses import hierarchical_mil_loss
-from .model import HierarchicalMIL
-from .schema import CaseDecisionInput
+from .losses import candidate_classification_loss
+from .model import ContextualCandidateClassifier
+from .schema import CandidateDecisionContext
 
 
 @dataclass(frozen=True, slots=True)
-class MILTrainingConfig:
+class CandidateDecisionTrainingConfig:
     epochs: int = 40
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     batch_size: int = 16
-    negative_instance_weight: float = 0.15
-    ranking_weight: float = 0.10
-    ranking_margin: float = 0.5
     seed: int = 2026
 
 
-def train_hierarchical_mil(
-    train_cases: list[CaseDecisionInput],
-    calibration_cases: list[CaseDecisionInput],
-    threshold_cases: list[CaseDecisionInput],
+def train_candidate_decision_model(
+    train_cases: list[CandidateDecisionContext],
+    calibration_cases: list[CandidateDecisionContext],
+    threshold_cases: list[CandidateDecisionContext],
     *,
-    config: MILTrainingConfig | None = None,
-    low_threshold: float = 0.28,
+    config: CandidateDecisionTrainingConfig | None = None,
+    candidate_threshold: float = 0.28,
     max_fpr: float = 0.10,
     device: str | torch.device = "cpu",
-) -> MILArtifact:
-    settings = config or MILTrainingConfig()
-    _require_labeled(train_cases, "train")
-    _require_labeled(calibration_cases, "calibration")
-    _require_labeled(threshold_cases, "threshold")
+) -> CandidateDecisionArtifact:
+    settings = config or CandidateDecisionTrainingConfig()
+    for rows, split in (
+        (train_cases, "train"),
+        (calibration_cases, "calibration"),
+        (threshold_cases, "threshold"),
+    ):
+        _require_candidate_labels(rows, split)
     random.seed(settings.seed)
     torch.manual_seed(settings.seed)
-    model = HierarchicalMIL().to(device)
+    model = ContextualCandidateClassifier().to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=settings.learning_rate,
@@ -54,41 +54,39 @@ def train_hierarchical_mil(
         for start in range(0, len(shuffled), settings.batch_size):
             batch = shuffled[start : start + settings.batch_size]
             outputs = [model(case) for case in batch]
-            labels = torch.tensor(
-                [case.label for case in batch], dtype=torch.float32, device=device
-            )
-            loss, _ = hierarchical_mil_loss(
+            loss = candidate_classification_loss(
                 outputs,
-                labels,
-                negative_instance_weight=settings.negative_instance_weight,
-                ranking_weight=settings.ranking_weight,
-                ranking_margin=settings.ranking_margin,
+                [_labels(case, device) for case in batch],
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
 
-    calibration_raw = _raw_probabilities(model, calibration_cases)
-    calibrator = PlattCalibrator().fit(
-        calibration_raw, [int(case.label) for case in calibration_cases]
+    calibration_raw, calibration_labels = _raw_probabilities(
+        model, calibration_cases
     )
-    threshold_raw = _raw_probabilities(model, threshold_cases)
+    calibrator = PlattCalibrator().fit(calibration_raw, calibration_labels)
+    threshold_raw, threshold_labels = _raw_probabilities(model, threshold_cases)
     threshold_probabilities = calibrator.transform(threshold_raw).tolist()
-    high_threshold = select_high_threshold(
+    validation_threshold = select_validation_threshold(
         threshold_probabilities,
-        [int(case.label) for case in threshold_cases],
+        threshold_labels,
         max_fpr=max_fpr,
     )
     model.eval()
-    return MILArtifact(
+    return CandidateDecisionArtifact(
         model=model.cpu(),
         calibrator=calibrator,
-        low_threshold=low_threshold,
-        high_threshold=high_threshold,
+        candidate_threshold=candidate_threshold,
+        validation_threshold=validation_threshold,
         metadata={
-            "training_samples": len(train_cases),
-            "calibration_samples": len(calibration_cases),
-            "threshold_samples": len(threshold_cases),
+            "training_candidates": sum(len(case.candidates) for case in train_cases),
+            "calibration_candidates": sum(
+                len(case.candidates) for case in calibration_cases
+            ),
+            "threshold_candidates": sum(
+                len(case.candidates) for case in threshold_cases
+            ),
             "max_fpr": max_fpr,
             "seed": settings.seed,
         },
@@ -96,15 +94,34 @@ def train_hierarchical_mil(
 
 
 def _raw_probabilities(
-    model: HierarchicalMIL, cases: list[CaseDecisionInput]
-) -> list[float]:
+    model: ContextualCandidateClassifier, cases: list[CandidateDecisionContext]
+) -> tuple[list[float], list[int]]:
     model.eval()
+    raw: list[float] = []
+    labels: list[int] = []
     with torch.no_grad():
-        return [float(torch.sigmoid(model(case).sample_logit).item()) for case in cases]
+        for case in cases:
+            raw.extend(
+                float(torch.sigmoid(logit).item())
+                for logit in model(case).candidate_logits
+            )
+            labels.extend(int(candidate.label) for candidate in case.candidates)
+    return raw, labels
 
 
-def _require_labeled(cases: list[CaseDecisionInput], split: str) -> None:
-    if not cases or any(case.label not in {0, 1} for case in cases):
-        raise ValueError(f"{split} cases must be non-empty and labeled 0/1")
-    if {int(case.label) for case in cases} != {0, 1}:
-        raise ValueError(f"{split} cases must contain both classes")
+def _labels(case: CandidateDecisionContext, device) -> torch.Tensor:
+    return torch.tensor(
+        [candidate.label for candidate in case.candidates],
+        dtype=torch.float32,
+        device=device,
+    )
+
+
+def _require_candidate_labels(
+    cases: list[CandidateDecisionContext], split: str
+) -> None:
+    labels = [candidate.label for case in cases for candidate in case.candidates]
+    if not labels or any(label not in {0, 1} for label in labels):
+        raise ValueError(f"{split} cases require candidate labels 0/1")
+    if set(int(label) for label in labels) != {0, 1}:
+        raise ValueError(f"{split} candidates must contain both classes")

@@ -144,8 +144,7 @@ class RequestAwareWebJobService(WebJobService):
     ) -> dict:
         config = self._config_for_job(job.job_id)
 
-        config.analysis.backend = "semantic"
-        config.candidate_gate.enabled = self.settings.candidate_gate_enabled
+        config.candidate_selection.enabled = self.settings.candidate_selection_enabled
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
         self._raise_if_cancelled(job.job_id)
 
@@ -232,6 +231,7 @@ class RequestAwareWebJobService(WebJobService):
                 ),
                 "max_candidates": config.analysis.max_candidates_per_project,
                 "source_file_count": len(source_files),
+                "generated_candidate_count": result.generated_candidate_count,
                 "candidate_count": len(result.candidates),
                 "cwe_hypothesis_count": sum(
                     len(item.cwe_hypotheses) for item in result.candidates
@@ -284,27 +284,27 @@ class RequestAwareWebJobService(WebJobService):
                 "request_settings": {
                     **options.safe_metadata(),
                     "effective_model": config.model.expert_model,
-                    "candidate_gate_threshold": config.candidate_gate.threshold,
-                    "decision_low_threshold": (
-                        config.validation.low_probability_threshold
+                    "candidate_selection_threshold": (
+                        config.candidate_selection.threshold
                     ),
-                    "decision_high_threshold": (
-                        config.validation.high_probability_threshold
+                    "candidate_decision_threshold": (
+                        config.validation.candidate_probability_threshold
+                    ),
+                    "finding_validation_threshold": (
+                        config.validation.finding_validation_threshold
                     ),
                 },
             },
-            "case_decision_score": (
-                to_dict(result.case_decision_score)
-                if result.case_decision_score is not None
-                else None
-            ),
-            "recall_trace": (
-                to_dict(result.recall_trace)
-                if result.recall_trace is not None
+            "candidate_decision_output": (
+                to_dict(result.candidate_decision_output)
+                if result.candidate_decision_output is not None
                 else None
             ),
             "findings": bundles,
             "routes": [to_dict(item) for item in result.routes],
+            "candidate_selection": [
+                to_dict(item) for item in result.selection_decisions
+            ],
             "structural_validations": [
                 to_dict(item) for item in result.structural_validations
             ],

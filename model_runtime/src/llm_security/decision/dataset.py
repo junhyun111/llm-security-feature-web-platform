@@ -9,11 +9,11 @@ import numpy as np
 from sklearn.model_selection import GroupShuffleSplit
 
 from .features import DECISION_FEATURE_NAMES
-from .mil.schema import CaseDecisionInput
+from .mil.schema import CandidateDecisionContext
 
 
-def write_case_jsonl(path: str | Path, cases: Iterable[CaseDecisionInput]) -> None:
-    """Persist nested Sample→Candidate→Bundle training examples."""
+def write_case_jsonl(path: str | Path, cases: Iterable[CandidateDecisionContext]) -> None:
+    """Persist nested project/candidate/bundle training examples."""
 
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -22,8 +22,8 @@ def write_case_jsonl(path: str | Path, cases: Iterable[CaseDecisionInput]) -> No
             handle.write(json.dumps(case.to_dict(), ensure_ascii=False) + "\n")
 
 
-def read_case_jsonl(path: str | Path) -> list[CaseDecisionInput]:
-    cases: list[CaseDecisionInput] = []
+def read_case_jsonl(path: str | Path) -> list[CandidateDecisionContext]:
+    cases: list[CandidateDecisionContext] = []
     for line_number, raw_line in enumerate(
         Path(path).read_text(encoding="utf-8").splitlines(), start=1
     ):
@@ -31,7 +31,7 @@ def read_case_jsonl(path: str | Path) -> list[CaseDecisionInput]:
             continue
         try:
             value = json.loads(raw_line)
-            cases.append(CaseDecisionInput.from_dict(value))
+            cases.append(CandidateDecisionContext.from_dict(value))
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(f"Invalid decision JSONL at line {line_number}") from exc
     return cases
@@ -50,7 +50,7 @@ def write_feature_csv(
         "split",
     ),
 ) -> None:
-    """Legacy diagnostic export; MIL training must use ``write_case_jsonl``."""
+    """Optional flat diagnostic export; training uses ``write_case_jsonl``."""
 
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -107,7 +107,7 @@ def grouped_train_calibration_threshold_indices(
     threshold_fraction: float = 0.15,
     random_state: int = 2026,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Named 70/15/15 split for MIL fit, Platt fit, and threshold selection."""
+    """Named 70/15/15 split for model fit, calibration, and thresholding."""
 
     return grouped_train_validation_test_indices(
         groups,

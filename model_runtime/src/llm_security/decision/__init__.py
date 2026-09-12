@@ -1,6 +1,6 @@
-"""Sample-level evidence decision layer."""
+"""Evidence-grounded candidate vulnerability decision layer."""
 
-from .calibration import select_high_threshold
+from .calibration import select_validation_threshold
 from .dataset import (
     grouped_train_validation_test_indices,
     grouped_train_calibration_threshold_indices,
@@ -10,38 +10,37 @@ from .dataset import (
 )
 from .features import DECISION_FEATURE_NAMES, EvidenceFeatureBuilder
 from .mil import (
-    CaseDecisionInput,
-    CaseDecisionScore,
+    CandidateDecisionContext,
+    CandidateDecisionArtifact,
+    CandidateDecisionOutput,
+    CandidateDecisionTrainingConfig,
     DecisionInputBuilder,
-    HierarchicalMIL,
-    MILArtifact,
-    MILTrainingConfig,
+    ContextualCandidateClassifier,
     PlattCalibrator,
-    train_hierarchical_mil,
+    train_candidate_decision_model,
 )
 from .policy import DecisionPolicy
 from .reporting import FindingReportBuilder
-from .scorer import CalibratedFindingScorer, MILDecisionScorer
+from .scorer import CandidateDecisionModel
 
 __all__ = [
-    "CalibratedFindingScorer",
-    "CaseDecisionInput",
-    "CaseDecisionScore",
+    "CandidateDecisionArtifact",
+    "CandidateDecisionModel",
+    "CandidateDecisionOutput",
+    "CandidateDecisionTrainingConfig",
+    "CandidateDecisionContext",
     "DECISION_FEATURE_NAMES",
     "DecisionInputBuilder",
     "DecisionPolicy",
     "EvidenceFeatureBuilder",
     "FindingReportBuilder",
-    "HierarchicalMIL",
-    "MILArtifact",
-    "MILDecisionScorer",
-    "MILTrainingConfig",
+    "ContextualCandidateClassifier",
     "PlattCalibrator",
     "grouped_train_validation_test_indices",
     "grouped_train_calibration_threshold_indices",
     "read_case_jsonl",
-    "select_high_threshold",
-    "train_hierarchical_mil",
+    "select_validation_threshold",
+    "train_candidate_decision_model",
     "write_case_jsonl",
     "write_feature_csv",
 ]

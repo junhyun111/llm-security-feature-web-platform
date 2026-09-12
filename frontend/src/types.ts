@@ -143,6 +143,7 @@ export type PatchBatch = {
 export type AnalysisPayload = {
   summary: {
     source_file_count: number
+    generated_candidate_count?: number
     candidate_count: number
     cwe_hypothesis_count: number
     finding_count: number
@@ -163,7 +164,6 @@ export type AnalysisPayload = {
     skipped_expert_task_count?: number
     expert_task_count?: number
     max_concurrent_expert_requests?: number
-    pre_gate_candidate_count?: number
     structural_rejected_count?: number
     skipped_source_file_count?: number
     expert_task_coverage?: number
@@ -173,20 +173,20 @@ export type AnalysisPayload = {
   }
   findings: FindingBundle[]
   routes?: RouteDecision[]
-  structural_validations?: ValidationResult[]
-  recall_trace?: {
-    ground_truth_count: number
-    stages: Array<{
-      stage: string
-      retained_truth_count: number
-      ground_truth_count: number
-      recall: number
-      retained_truth_ids: string[]
-      dropped_truth_ids: string[]
-    }>
-    top_k_candidate_recall: Record<string, number>
-    validator_verdict_truth_ids: Record<string, string[]>
+  candidate_selection?: Array<{
+    candidate_id: string
+    score: number
+    selected: boolean
+    reason: string
+  }>
+  candidate_decision_output?: {
+    case_id: string
+    candidate_probabilities: Record<string, number>
+    project_probability: number
+    candidate_attention: Record<string, number>
+    bundle_attention: Record<string, Record<string, number>>
   } | null
+  structural_validations?: ValidationResult[]
   usage?: UsageRecord[]
   errors?: string[]
   expert_failures?: Array<{

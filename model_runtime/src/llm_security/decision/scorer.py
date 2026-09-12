@@ -1,109 +1,79 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import Any
+import math
 
 import torch
 
-from .features import DECISION_FEATURE_NAMES
 from .mil.calibration import PlattCalibrator
-from .mil.model import HierarchicalMIL
-from .mil.schema import CaseDecisionInput, CaseDecisionScore
+from .mil.model import ContextualCandidateClassifier
+from .mil.schema import CandidateDecisionContext, CandidateDecisionOutput
 
 
-class CalibratedFindingScorer:
-    """Legacy explicit bundle scorer; never constructed as a fallback.
-
-    This adapter remains only for reading older experiments. Both classifier and
-    calibrator are mandatory, so production cannot silently use hand weights.
-    """
+class CandidateDecisionModel:
+    """Predict candidate vulnerabilities using shared global project context."""
 
     def __init__(
         self,
-        classifier: Any,
-        calibrator: Any,
-        *,
-        feature_names: Sequence[str] = DECISION_FEATURE_NAMES,
-    ) -> None:
-        if classifier is None or calibrator is None:
-            raise RuntimeError("A trained classifier and calibrator are required")
-        self.classifier = classifier
-        self.calibrator = calibrator
-        self.feature_names = tuple(feature_names)
-
-    def score(self, features: Mapping[str, float]) -> float:
-        _, calibrated = self.score_with_raw(features)
-        return calibrated
-
-    predict = score
-
-    def score_with_raw(self, features: Mapping[str, float]) -> tuple[float, float]:
-        vector = [[float(features.get(name, 0.0)) for name in self.feature_names]]
-        raw = float(self.classifier.predict_proba(vector)[0][1])
-        if hasattr(self.calibrator, "transform"):
-            calibrated = float(self.calibrator.transform([raw])[0])
-        else:
-            calibrated = float(self.calibrator.predict_proba([[raw]])[0][1])
-        return _bounded(raw), _bounded(calibrated)
-
-
-class MILDecisionScorer:
-    """Score global case context and every candidate in one MIL forward pass."""
-
-    def __init__(
-        self,
-        model: HierarchicalMIL,
+        model: ContextualCandidateClassifier,
         calibrator: PlattCalibrator,
         *,
-        low_threshold: float,
-        high_threshold: float,
+        candidate_threshold: float,
+        validation_threshold: float,
     ) -> None:
-        if not 0.0 <= low_threshold <= high_threshold <= 1.0:
-            raise ValueError("thresholds must satisfy 0 <= low <= high <= 1")
+        if not 0.0 <= candidate_threshold <= validation_threshold <= 1.0:
+            raise ValueError(
+                "thresholds must satisfy 0 <= candidate <= validation <= 1"
+            )
         self.model = model
         self.calibrator = calibrator
-        self.low_threshold = low_threshold
-        self.high_threshold = high_threshold
+        self.candidate_threshold = candidate_threshold
+        self.validation_threshold = validation_threshold
 
-    def score(self, case: CaseDecisionInput) -> CaseDecisionScore:
+    def predict(self, case: CandidateDecisionContext) -> CandidateDecisionOutput:
         self.model.eval()
         with torch.no_grad():
             output = self.model(case)
-            raw = float(torch.sigmoid(output.sample_logit).item())
-        probability = _bounded(float(self.calibrator.transform([raw])[0]))
-        candidate_scores = {
-            candidate.candidate_id: float(torch.sigmoid(logit).item())
-            for candidate, logit in zip(case.candidates, output.candidate_logits)
+        raw = [
+            float(torch.sigmoid(logit).item()) for logit in output.candidate_logits
+        ]
+        calibrated = self.calibrator.transform(raw).tolist() if raw else []
+        candidate_probabilities = {
+            candidate.candidate_id: _bounded(float(probability))
+            for candidate, probability in zip(
+                case.candidates, calibrated, strict=True
+            )
         }
         candidate_attention = {
             candidate.candidate_id: float(weight.item())
-            for candidate, weight in zip(case.candidates, output.candidate_attention)
+            for candidate, weight in zip(
+                case.candidates, output.candidate_attention, strict=True
+            )
         }
         bundle_attention = {
             candidate.candidate_id: {
                 bundle.bundle_id: float(weight.item())
-                for bundle, weight in zip(candidate.bundles, weights)
+                for bundle, weight in zip(
+                    candidate.bundles, weights, strict=True
+                )
             }
-            for candidate, weights in zip(case.candidates, output.bundle_attention)
+            for candidate, weights in zip(
+                case.candidates, output.bundle_attention, strict=True
+            )
         }
-        top_candidate_id = (
-            max(candidate_scores, key=candidate_scores.get) if candidate_scores else None
-        )
-        top_bundle_id = None
-        if top_candidate_id is not None:
-            weights = bundle_attention.get(top_candidate_id, {})
-            if weights:
-                top_bundle_id = max(weights, key=weights.get)
-        return CaseDecisionScore(
-            sample_id=case.sample_id,
-            raw_probability=raw,
-            probability=probability,
-            candidate_scores=candidate_scores,
+        return CandidateDecisionOutput(
+            case_id=case.case_id,
+            candidate_probabilities=candidate_probabilities,
+            project_probability=_project_probability(
+                candidate_probabilities.values()
+            ),
             candidate_attention=candidate_attention,
             bundle_attention=bundle_attention,
-            top_candidate_id=top_candidate_id,
-            top_bundle_id=top_bundle_id,
         )
+
+
+def _project_probability(probabilities) -> float:
+    safe_probability = math.prod(1.0 - value for value in probabilities)
+    return _bounded(1.0 - safe_probability)
 
 
 def _bounded(value: float) -> float:

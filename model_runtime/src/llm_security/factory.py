@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .aggregation import EvidenceAggregator
-from .decision import DecisionPolicy, MILArtifact, MILDecisionScorer
+from .decision import (
+    CandidateDecisionArtifact,
+    CandidateDecisionModel,
+    DecisionPolicy,
+)
+from .decision.verifier import EvidenceVerifier
 from .analysis import LearnedCandidateRanker, SemanticStaticAnalyzer
 from .config import AppConfig
 from .evidence import ContextBuilder
@@ -13,11 +18,12 @@ from .experts import (
     ExpertRunner,
     ParallelExpertRunner,
 )
+from .evidence_processing import EvidenceProcessor
 from .llm import OpenRouterClient
 from .knowledge import LocalSecurityKnowledgeRetriever
 from .pipeline import VulnerabilityPipeline
-from .routing import BudgetedUtilityRouter, CandidateGate, Router
-from .static_analysis import LightweightStaticAnalyzer
+from .routing import BudgetedUtilityRouter, Router
+from .selection import CandidateSelector
 from .validation import EvidenceValidator
 
 
@@ -58,26 +64,31 @@ def build_context_builder(config: AppConfig) -> ContextBuilder:
 
 def build_decision_components(
     config: AppConfig,
-) -> tuple[MILDecisionScorer, DecisionPolicy]:
+) -> tuple[CandidateDecisionModel, DecisionPolicy]:
     if not config.validation.decision_model_path:
-        raise RuntimeError("Trained MIL decision model required.")
+        raise RuntimeError("Trained candidate decision model required.")
     try:
-        artifact = MILArtifact.load(config.validation.decision_model_path)
+        artifact = CandidateDecisionArtifact.load(
+            config.validation.decision_model_path
+        )
     except (OSError, ValueError) as exc:
         raise ValueError(
-            "Cannot load configured MIL decision artifact: "
+            "Cannot load configured candidate decision artifact: "
             + config.validation.decision_model_path
         ) from exc
-    config.validation.low_probability_threshold = artifact.low_threshold
-    config.validation.high_probability_threshold = artifact.high_threshold
-    return MILDecisionScorer(
+    config.validation.candidate_probability_threshold = (
+        artifact.candidate_threshold
+    )
+    config.validation.finding_validation_threshold = (
+        artifact.validation_threshold
+    )
+    return CandidateDecisionModel(
         artifact.model,
         artifact.calibrator,
-        low_threshold=artifact.low_threshold,
-        high_threshold=artifact.high_threshold,
+        candidate_threshold=artifact.candidate_threshold,
+        validation_threshold=artifact.validation_threshold,
     ), DecisionPolicy(
-        low_threshold=artifact.low_threshold,
-        high_threshold=artifact.high_threshold,
+        validation_threshold=artifact.validation_threshold,
     )
 
 
@@ -86,20 +97,20 @@ def build_candidate_analyzer(
     *,
     max_source_bytes: int = 2 * 1024 * 1024,
     parse_timeout_ms: int = 30_000,
-    require_ranker: bool = False,
 ):
-    """Build the configured analyzer and fail closed for required rankers."""
+    """Build the semantic analyzer; candidate selection is downstream."""
 
     config.validate()
-    if config.analysis.backend == "legacy":
-        if require_ranker:
-            raise ValueError(
-                "The learned Utility Router requires the semantic Candidate Ranker"
-            )
-        return LightweightStaticAnalyzer(
-            max_candidates=None,
-            context_lines=config.analysis.context_lines,
-        )
+    return SemanticStaticAnalyzer(
+        max_source_bytes=max_source_bytes,
+        parse_timeout_ms=parse_timeout_ms,
+    )
+
+
+def build_candidate_selector(
+    config: AppConfig, *, require_ranker: bool = False
+) -> CandidateSelector:
+    """Build the one component that owns rank, threshold, and Top-K."""
 
     ranker = None
     if config.analysis.candidate_ranker_path:
@@ -113,10 +124,11 @@ def build_candidate_analyzer(
     elif config.analysis.candidate_ranker_required or require_ranker:
         raise ValueError("A Candidate Ranker artifact is required but not configured")
 
-    return SemanticStaticAnalyzer(
-        max_source_bytes=max_source_bytes,
-        parse_timeout_ms=parse_timeout_ms,
-        candidate_ranker=ranker,
+    return CandidateSelector(
+        ranker=ranker,
+        threshold=config.candidate_selection.threshold,
+        threshold_enabled=config.candidate_selection.enabled,
+        max_candidates=config.analysis.max_candidates_per_project,
     )
 
 
@@ -131,17 +143,25 @@ def build_pipeline(
         config.configure_decision_feature_collection()
         scorer = None
         decision_policy = DecisionPolicy(
-            low_threshold=config.validation.low_probability_threshold,
-            high_threshold=config.validation.high_probability_threshold,
+            validation_threshold=config.validation.finding_validation_threshold,
         )
     else:
         scorer, decision_policy = build_decision_components(config)
-    analyzer = build_candidate_analyzer(
-        config,
-        require_ranker=isinstance(router, BudgetedUtilityRouter),
+    analyzer = build_candidate_analyzer(config)
+    selector = build_candidate_selector(
+        config, require_ranker=isinstance(router, BudgetedUtilityRouter)
+    )
+    validator = EvidenceValidator(
+        minimum_confidence=config.validation.minimum_confidence,
+        minimum_confidence_by_expert=config.validation.minimum_confidence_by_expert,
+        client=client,
+        model=config.model.validator_model,
+        strong_model=config.model.strong_model,
+        use_llm_for_uncertain=config.validation.use_llm_for_uncertain,
     )
     return VulnerabilityPipeline(
         analyzer=analyzer,
+        selector=selector,
         router=router,
         expert_runner=ExpertRunner(
             client=client,
@@ -149,25 +169,17 @@ def build_pipeline(
             context_builder=build_context_builder(config),
             models_by_family=config.model.expert_models,
         ),
-        aggregator=EvidenceAggregator(),
-        validator=EvidenceValidator(
-            minimum_confidence=config.validation.minimum_confidence,
-            minimum_confidence_by_expert=(
-                config.validation.minimum_confidence_by_expert
-            ),
-            client=client,
-            model=config.model.validator_model,
-            strong_model=config.model.strong_model,
-            use_llm_for_uncertain=config.validation.use_llm_for_uncertain,
-            falsify_all_supported=config.validation.falsify_all_supported,
+        evidence_processor=EvidenceProcessor(aggregator=EvidenceAggregator()),
+        decision_model=scorer,
+        verifier=(
+            None
+            if collect_decision_features
+            else EvidenceVerifier(
+                candidate_threshold=scorer.candidate_threshold,
+                policy=decision_policy,
+                validator=validator,
+            )
         ),
-        candidate_gate=CandidateGate(
-            enabled=config.candidate_gate.enabled,
-            threshold=config.candidate_gate.threshold,
-        ),
-        max_candidates=config.analysis.max_candidates_per_project,
-        mil_scorer=scorer,
-        decision_policy=decision_policy,
         collection_only=collect_decision_features,
     )
 
@@ -194,12 +206,21 @@ def build_batched_web_pipeline(
             # utility statistics; the user's model executes the batched request.
             # This path is surfaced as unvalidated in the web UI and result JSON.
             router.execution_model_id = None
-    analyzer = build_candidate_analyzer(
-        config,
-        require_ranker=isinstance(router, BudgetedUtilityRouter),
+    analyzer = build_candidate_analyzer(config)
+    selector = build_candidate_selector(
+        config, require_ranker=isinstance(router, BudgetedUtilityRouter)
+    )
+    validator = EvidenceValidator(
+        minimum_confidence=config.validation.minimum_confidence,
+        minimum_confidence_by_expert=config.validation.minimum_confidence_by_expert,
+        client=client,
+        model=config.model.validator_model,
+        strong_model=None,
+        use_llm_for_uncertain=True,
     )
     return VulnerabilityPipeline(
         analyzer=analyzer,
+        selector=selector,
         router=router,
         expert_runner=BatchedExpertRunner(
             client=client,
@@ -208,28 +229,13 @@ def build_batched_web_pipeline(
             max_batch_characters=max_batch_characters,
             max_tasks=max_batch_tasks,
         ),
-        aggregator=EvidenceAggregator(),
-        validator=EvidenceValidator(
-            minimum_confidence=config.validation.minimum_confidence,
-            minimum_confidence_by_expert=(
-                config.validation.minimum_confidence_by_expert
-            ),
-            # The critic is selective: EvidenceValidator calls it only for
-            # uncertain findings, so web analysis retains a real falsification
-            # path without turning every finding into another LLM request.
-            client=client,
-            model=config.model.validator_model,
-            strong_model=None,
-            use_llm_for_uncertain=True,
-            falsify_all_supported=False,
+        evidence_processor=EvidenceProcessor(aggregator=EvidenceAggregator()),
+        decision_model=scorer,
+        verifier=EvidenceVerifier(
+            candidate_threshold=scorer.candidate_threshold,
+            policy=decision_policy,
+            validator=validator,
         ),
-        candidate_gate=CandidateGate(
-            enabled=config.candidate_gate.enabled,
-            threshold=config.candidate_gate.threshold,
-        ),
-        max_candidates=config.analysis.max_candidates_per_project,
-        mil_scorer=scorer,
-        decision_policy=decision_policy,
     )
 
 
@@ -258,12 +264,21 @@ def build_parallel_web_pipeline(
             # The learned Router still chooses logical Experts, while the
             # request-selected model executes every independent task.
             router.execution_model_id = None
-    analyzer = build_candidate_analyzer(
-        config,
-        require_ranker=isinstance(router, BudgetedUtilityRouter),
+    analyzer = build_candidate_analyzer(config)
+    selector = build_candidate_selector(
+        config, require_ranker=isinstance(router, BudgetedUtilityRouter)
+    )
+    validator = EvidenceValidator(
+        minimum_confidence=config.validation.minimum_confidence,
+        minimum_confidence_by_expert=config.validation.minimum_confidence_by_expert,
+        client=client,
+        model=config.model.validator_model,
+        strong_model=None,
+        use_llm_for_uncertain=True,
     )
     return VulnerabilityPipeline(
         analyzer=analyzer,
+        selector=selector,
         router=router,
         expert_runner=ParallelExpertRunner(
             client=client,
@@ -275,23 +290,11 @@ def build_parallel_web_pipeline(
             progress_callback=progress_callback,
             cancel_callback=cancel_callback,
         ),
-        aggregator=EvidenceAggregator(),
-        validator=EvidenceValidator(
-            minimum_confidence=config.validation.minimum_confidence,
-            minimum_confidence_by_expert=(
-                config.validation.minimum_confidence_by_expert
-            ),
-            client=client,
-            model=config.model.validator_model,
-            strong_model=None,
-            use_llm_for_uncertain=True,
-            falsify_all_supported=False,
+        evidence_processor=EvidenceProcessor(aggregator=EvidenceAggregator()),
+        decision_model=scorer,
+        verifier=EvidenceVerifier(
+            candidate_threshold=scorer.candidate_threshold,
+            policy=decision_policy,
+            validator=validator,
         ),
-        candidate_gate=CandidateGate(
-            enabled=config.candidate_gate.enabled,
-            threshold=config.candidate_gate.threshold,
-        ),
-        max_candidates=config.analysis.max_candidates_per_project,
-        mil_scorer=scorer,
-        decision_policy=decision_policy,
     )

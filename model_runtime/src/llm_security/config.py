@@ -41,14 +41,13 @@ class RouterConfig:
 
 
 @dataclass(slots=True)
-class CandidateGateConfig:
+class CandidateSelectionConfig:
     enabled: bool = False
     threshold: float = 0.40
 
 
 @dataclass(slots=True)
 class AnalysisConfig:
-    backend: str = "semantic"
     max_candidates_per_project: int = 4
     context_lines: int = 25
     max_context_characters: int = 30_000
@@ -62,17 +61,13 @@ class ValidationConfig:
     minimum_confidence: float = 0.60
     # These are deployment values exported from validation-set selection. They
     # are not adjusted from web sensitivity at request time.
-    low_probability_threshold: float = 0.28
-    high_probability_threshold: float = 0.71
+    candidate_probability_threshold: float = 0.28
+    finding_validation_threshold: float = 0.71
     decision_model_path: str | None = None
     minimum_confidence_by_expert: dict[ExpertFamily, float] = field(
         default_factory=dict
     )
     use_llm_for_uncertain: bool = True
-    # The falsifier is intentionally reserved for unresolved findings. Running it
-    # on already evidence-backed findings used to make a second LLM decision an
-    # accidental hard filter and could turn true positives into false negatives.
-    falsify_all_supported: bool = False
 
 
 @dataclass(slots=True)
@@ -88,15 +83,17 @@ class RuntimeConfig:
 class AppConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     router: RouterConfig = field(default_factory=RouterConfig)
-    candidate_gate: CandidateGateConfig = field(default_factory=CandidateGateConfig)
+    candidate_selection: CandidateSelectionConfig = field(
+        default_factory=CandidateSelectionConfig
+    )
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
 
     def configure_decision_feature_collection(self) -> None:
-        """Preserve positive bags while collecting nested MIL inputs."""
+        """Preserve candidate coverage while collecting decision inputs."""
 
-        self.candidate_gate.enabled = False
+        self.candidate_selection.enabled = False
         self.analysis.max_candidates_per_project = 4
 
     @classmethod
@@ -182,12 +179,15 @@ class AppConfig:
                     values.get("USE_RULE_FALLBACK", "true")
                 ),
             ),
-            candidate_gate=CandidateGateConfig(
-                enabled=_as_bool(values.get("CANDIDATE_GATE_ENABLED", "false")),
-                threshold=float(values.get("CANDIDATE_GATE_THRESHOLD", "0.40"))
+            candidate_selection=CandidateSelectionConfig(
+                enabled=_as_bool(
+                    values.get("CANDIDATE_SELECTION_ENABLED", "false")
+                ),
+                threshold=float(
+                    values.get("CANDIDATE_SELECTION_THRESHOLD", "0.40")
+                ),
             ),
             analysis=AnalysisConfig(
-                backend=values.get("ANALYSIS_BACKEND", "semantic").strip().lower(),
                 max_candidates_per_project=int(values.get("MAX_CANDIDATES", "4")),
                 context_lines=int(values.get("CONTEXT_LINES", "25")),
                 max_context_characters=int(values.get("MAX_CONTEXT_CHARACTERS", "30000")),
@@ -204,11 +204,11 @@ class AppConfig:
             ),
             validation=ValidationConfig(
                 minimum_confidence=float(values.get("MINIMUM_CONFIDENCE", "0.60")),
-                low_probability_threshold=float(
-                    values.get("DECISION_LOW_THRESHOLD", "0.28")
+                candidate_probability_threshold=float(
+                    values.get("CANDIDATE_DECISION_THRESHOLD", "0.28")
                 ),
-                high_probability_threshold=float(
-                    values.get("DECISION_HIGH_THRESHOLD", "0.71")
+                finding_validation_threshold=float(
+                    values.get("FINDING_VALIDATION_THRESHOLD", "0.71")
                 ),
                 decision_model_path=_resolve_optional_path(
                     values.get("DECISION_MODEL_PATH"),
@@ -221,9 +221,6 @@ class AppConfig:
                 },
                 use_llm_for_uncertain=_as_bool(
                     values.get("USE_LLM_FOR_UNCERTAIN", "true")
-                ),
-                falsify_all_supported=_as_bool(
-                    values.get("FALSIFY_ALL_SUPPORTED", "false")
                 ),
             ),
             runtime=RuntimeConfig(
@@ -240,8 +237,10 @@ class AppConfig:
         return config
 
     def validate(self) -> None:
-        if not 0.0 <= self.candidate_gate.threshold <= 1.0:
-            raise ValueError("CANDIDATE_GATE_THRESHOLD must be between 0 and 1")
+        if not 0.0 <= self.candidate_selection.threshold <= 1.0:
+            raise ValueError(
+                "CANDIDATE_SELECTION_THRESHOLD must be between 0 and 1"
+            )
         if not 0.0 <= self.router.high_confidence <= 1.0:
             raise ValueError("ROUTER_HIGH_CONFIDENCE must be between 0 and 1")
         if not 0.0 <= self.router.min_margin <= 1.0:
@@ -254,23 +253,16 @@ class AppConfig:
             raise ValueError("ROUTER_TARGET_COVERAGE must be between 0 and 1")
         if self.analysis.max_candidates_per_project < 1:
             raise ValueError("MAX_CANDIDATES must be positive")
-        if self.analysis.backend not in {"legacy", "semantic"}:
-            raise ValueError("ANALYSIS_BACKEND must be legacy or semantic")
         if self.analysis.candidate_ranker_required and not self.analysis.candidate_ranker_path:
             raise ValueError(
                 "CANDIDATE_RANKER_PATH is required when CANDIDATE_RANKER_REQUIRED=true"
             )
-        if self.analysis.backend == "legacy" and (
-            self.analysis.candidate_ranker_path
-            or self.analysis.candidate_ranker_required
-        ):
-            raise ValueError("Candidate Ranker requires ANALYSIS_BACKEND=semantic")
         if not 0.0 <= self.validation.minimum_confidence <= 1.0:
             raise ValueError("MINIMUM_CONFIDENCE must be between 0 and 1")
         if not (
             0.0
-            <= self.validation.low_probability_threshold
-            <= self.validation.high_probability_threshold
+            <= self.validation.candidate_probability_threshold
+            <= self.validation.finding_validation_threshold
             <= 1.0
         ):
             raise ValueError(

@@ -13,7 +13,6 @@ from .models import (
     ExpertAssignment,
     ExpertEvidence,
     ExpertFamily,
-    Finding,
     RouteDecision,
     UsageRecord,
 )
@@ -61,7 +60,6 @@ class ExpertTaskFailure:
 
 @dataclass(slots=True)
 class ExpertRunOutput:
-    findings: list[Finding]
     usage: list[UsageRecord]
     errors: list[str]
     task_count: int = 0
@@ -151,7 +149,6 @@ class ExpertRunner:
                         f"{assignment.model_id}: {error}"
                     )
         return ExpertRunOutput(
-            findings=[],
             evidence=evidence,
             usage=usage,
             errors=errors,
@@ -228,7 +225,7 @@ class ParallelExpertRunner:
             self._notify_progress(
                 ExpertProgress(0, 0, 0, 0, 0, self.max_concurrency)
             )
-            return ExpertRunOutput(findings=[], usage=[], errors=[])
+            return ExpertRunOutput(usage=[], errors=[])
 
         results: dict[str, ExpertTaskResult] = {}
         failures: dict[str, ExpertTaskFailure] = {}
@@ -453,7 +450,6 @@ class ParallelExpertRunner:
         )
 
         return ExpertRunOutput(
-            findings=[],
             evidence=findings,
             usage=usage,
             errors=ordered_errors,
@@ -779,7 +775,6 @@ class BatchedExpertRunner:
             )
 
         return ExpertRunOutput(
-            findings=[],
             evidence=findings,
             usage=usage,
             errors=errors,

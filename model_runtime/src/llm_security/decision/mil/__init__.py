@@ -1,33 +1,40 @@
-from .artifact import MILArtifact
+from .artifact import CandidateDecisionArtifact
 from .attention import GatedAttention
 from .calibration import PlattCalibrator
 from .encoder import BundleEncoder, CandidateEncoder
-from .losses import hierarchical_mil_loss
-from .model import HierarchicalMIL, HierarchicalMILConfig, MILForwardOutput
+from .losses import candidate_classification_loss
+from .model import (
+    CandidateForwardOutput,
+    ContextualCandidateClassifier,
+    ContextualCandidateClassifierConfig,
+)
 from .schema import (
     BundleDecisionInput,
     CandidateDecisionInput,
-    CaseDecisionInput,
-    CaseDecisionScore,
+    CandidateDecisionContext,
+    CandidateDecisionOutput,
     DecisionInputBuilder,
 )
-from .training import MILTrainingConfig, train_hierarchical_mil
+from .training import (
+    CandidateDecisionTrainingConfig,
+    train_candidate_decision_model,
+)
 
 __all__ = [
     "BundleDecisionInput",
     "BundleEncoder",
     "CandidateDecisionInput",
+    "CandidateDecisionOutput",
+    "CandidateDecisionArtifact",
+    "CandidateDecisionTrainingConfig",
+    "CandidateForwardOutput",
     "CandidateEncoder",
-    "CaseDecisionInput",
-    "CaseDecisionScore",
+    "CandidateDecisionContext",
     "DecisionInputBuilder",
     "GatedAttention",
-    "HierarchicalMIL",
-    "HierarchicalMILConfig",
-    "MILArtifact",
-    "MILForwardOutput",
-    "MILTrainingConfig",
+    "ContextualCandidateClassifier",
+    "ContextualCandidateClassifierConfig",
     "PlattCalibrator",
-    "hierarchical_mil_loss",
-    "train_hierarchical_mil",
+    "candidate_classification_loss",
+    "train_candidate_decision_model",
 ]

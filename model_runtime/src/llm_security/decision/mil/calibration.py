@@ -7,7 +7,7 @@ from sklearn.linear_model import LogisticRegression
 
 
 class PlattCalibrator:
-    """Serializable sample-level Platt scaling."""
+    """Serializable candidate-probability Platt scaling."""
 
     def __init__(self, slope: float | None = None, intercept: float | None = None) -> None:
         self.slope = slope

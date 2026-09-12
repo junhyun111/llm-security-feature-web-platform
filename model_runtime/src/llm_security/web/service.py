@@ -30,7 +30,7 @@ from ..models import (
     to_dict,
 )
 from ..patching import LLMBatchPatchAgent, LLMPatchAgent
-from ..routing import AdaptiveExpertRouter, AnchorRareRouter, BudgetedUtilityRouter
+from ..routing import BudgetedUtilityRouter
 from ..verification import TemporaryPatchVerifier
 
 
@@ -80,7 +80,7 @@ class WebSettings:
     max_source_file_bytes: int = 5 * 1024 * 1024
     max_source_total_bytes: int = 100 * 1024 * 1024
     worker_count: int = 1
-    candidate_gate_enabled: bool = True
+    candidate_selection_enabled: bool = True
     max_concurrent_expert_requests: int = 100
     expert_recovery_attempts: int = 1
     detection_max_output_tokens: int = 16_384
@@ -111,8 +111,8 @@ class WebSettings:
                 float(values.get("WEB_MAX_SOURCE_TOTAL_MB", "100")) * 1024 * 1024
             ),
             worker_count=max(1, int(values.get("WEB_WORKERS", "1"))),
-            candidate_gate_enabled=_as_bool(
-                values.get("WEB_CANDIDATE_GATE_ENABLED", "true")
+            candidate_selection_enabled=_as_bool(
+                values.get("WEB_CANDIDATE_SELECTION_ENABLED", "true")
             ),
             max_concurrent_expert_requests=min(
                 100,
@@ -826,8 +826,9 @@ class WebJobService:
             raise RuntimeError(
                 "Web analysis calls OpenRouter; set RUN_PAID_EXPERIMENTS=1 in .env"
             )
-        config.analysis.backend = "semantic"
-        config.candidate_gate.enabled = self.settings.candidate_gate_enabled
+        config.candidate_selection.enabled = (
+            self.settings.candidate_selection_enabled
+        )
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
         self._raise_if_cancelled(job.job_id)
         progress(20, "Loading C/C++ source files")
@@ -901,6 +902,7 @@ class WebJobService:
                 ),
                 "max_candidates": config.analysis.max_candidates_per_project,
                 "source_file_count": len(source_files),
+                "generated_candidate_count": result.generated_candidate_count,
                 "candidate_count": len(result.candidates),
                 "cwe_hypothesis_count": sum(
                     len(item.cwe_hypotheses) for item in result.candidates
@@ -951,18 +953,16 @@ class WebJobService:
                     or source_warnings
                 ),
             },
-            "case_decision_score": (
-                to_dict(result.case_decision_score)
-                if result.case_decision_score is not None
-                else None
-            ),
-            "recall_trace": (
-                to_dict(result.recall_trace)
-                if result.recall_trace is not None
+            "candidate_decision_output": (
+                to_dict(result.candidate_decision_output)
+                if result.candidate_decision_output is not None
                 else None
             ),
             "findings": bundles,
             "routes": [to_dict(item) for item in result.routes],
+            "candidate_selection": [
+                to_dict(item) for item in result.selection_decisions
+            ],
             "structural_validations": [
                 to_dict(item) for item in result.structural_validations
             ],
@@ -1102,17 +1102,7 @@ def load_router_artifact(path: str | Path):
         raise FileNotFoundError(
             f"Router artifact not found: {artifact}. Run 01_train_router.ipynb first."
         )
-    errors = []
-    for router_class in (
-        BudgetedUtilityRouter,
-        AnchorRareRouter,
-        AdaptiveExpertRouter,
-    ):
-        try:
-            return router_class.load(artifact)
-        except TypeError as error:
-            errors.append(str(error))
-    raise TypeError("Unsupported Router artifact: " + " | ".join(errors))
+    return BudgetedUtilityRouter.load(artifact)
 
 
 def _expert_progress_callback(

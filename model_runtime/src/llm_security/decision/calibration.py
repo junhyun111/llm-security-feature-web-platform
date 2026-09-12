@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 
-def select_high_threshold(
+def select_validation_threshold(
     probabilities: Sequence[float],
     labels: Sequence[int],
     *,

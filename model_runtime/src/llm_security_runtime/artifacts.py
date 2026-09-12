@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from llm_security.analysis import LearnedCandidateRanker
-from llm_security.decision import MILArtifact
+from llm_security.decision import CandidateDecisionArtifact
 from llm_security.models import ACTIVE_UTILITY_EXPERTS
 from llm_security.routing import BudgetedUtilityRouter
 
@@ -17,7 +17,7 @@ def inspect_artifacts(paths: RuntimePaths) -> dict[str, object]:
     paths.require_artifacts()
     router = BudgetedUtilityRouter.load(paths.router_artifact)
     ranker = LearnedCandidateRanker.load(paths.candidate_ranker_artifact)
-    decision = MILArtifact.load(paths.decision_artifact)
+    decision = CandidateDecisionArtifact.load(paths.decision_artifact)
 
     if router.feature_schema_version != ranker.feature_schema_version:
         raise ValueError(
@@ -69,8 +69,8 @@ def inspect_artifacts(paths: RuntimePaths) -> dict[str, object]:
             "path": str(paths.decision_artifact),
             "sha256": _sha256(paths.decision_artifact),
             "schema_version": decision.schema_version,
-            "low_threshold": decision.low_threshold,
-            "high_threshold": decision.high_threshold,
+            "candidate_threshold": decision.candidate_threshold,
+            "validation_threshold": decision.validation_threshold,
         },
     }
 

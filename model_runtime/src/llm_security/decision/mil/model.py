@@ -8,30 +8,35 @@ from torch import nn
 from ..features import DECISION_FEATURE_NAMES
 from .attention import GatedAttention
 from .encoder import BundleEncoder, CandidateEncoder
-from .schema import CANDIDATE_FEATURE_NAMES, MIL_FAMILIES, CaseDecisionInput
+from .schema import (
+    CANDIDATE_FEATURE_NAMES,
+    EXPERT_FAMILIES,
+    CandidateDecisionContext,
+)
 
 
 @dataclass(frozen=True, slots=True)
-class HierarchicalMILConfig:
-    bundle_feature_dim: int = len(DECISION_FEATURE_NAMES) + len(MIL_FAMILIES)
+class ContextualCandidateClassifierConfig:
+    bundle_feature_dim: int = len(DECISION_FEATURE_NAMES) + len(EXPERT_FAMILIES)
     candidate_feature_dim: int = len(CANDIDATE_FEATURE_NAMES)
     dropout: float = 0.15
 
 
 @dataclass(slots=True)
-class MILForwardOutput:
-    sample_logit: torch.Tensor
+class CandidateForwardOutput:
     candidate_logits: torch.Tensor
     candidate_attention: torch.Tensor
     bundle_attention: list[torch.Tensor]
 
 
-class HierarchicalMIL(nn.Module):
-    """Two-stage Bundle→Candidate→Sample multiple-instance model."""
+class ContextualCandidateClassifier(nn.Module):
+    """Bundle and candidate encoders with shared global project context."""
 
-    def __init__(self, config: HierarchicalMILConfig | None = None) -> None:
+    def __init__(
+        self, config: ContextualCandidateClassifierConfig | None = None
+    ) -> None:
         super().__init__()
-        self.config = config or HierarchicalMILConfig()
+        self.config = config or ContextualCandidateClassifierConfig()
         self.bundle_encoder = BundleEncoder(
             self.config.bundle_feature_dim, self.config.dropout
         )
@@ -42,15 +47,8 @@ class HierarchicalMIL(nn.Module):
         )
         self.candidate_score = nn.Linear(64, 1)
         self.candidate_attention = GatedAttention(64)
-        self.empty_candidate = nn.Parameter(torch.zeros(64))
-        self.sample_head = nn.Sequential(
-            nn.Linear(130, 64),
-            nn.ReLU(),
-            nn.Dropout(self.config.dropout),
-            nn.Linear(64, 1),
-        )
 
-    def forward(self, case: CaseDecisionInput) -> MILForwardOutput:
+    def forward(self, case: CandidateDecisionContext) -> CandidateForwardOutput:
         device = self.empty_evidence.device
         candidate_embeddings: list[torch.Tensor] = []
         bundle_weights: list[torch.Tensor] = []
@@ -78,35 +76,15 @@ class HierarchicalMIL(nn.Module):
 
         if candidate_embeddings:
             encoded_candidates = torch.stack(candidate_embeddings)
-            candidate_logits = self.candidate_score(encoded_candidates).squeeze(-1)
-            attention_embedding, candidate_attention = self.candidate_attention(
+            global_context, candidate_attention = self.candidate_attention(
                 encoded_candidates
             )
-            critical_index = int(torch.argmax(candidate_logits).item())
-            critical_embedding = encoded_candidates[critical_index]
-            top_count = min(2, candidate_logits.numel())
-            top_values = torch.topk(candidate_logits, top_count).values
-            max_score = top_values[0]
-            top2_mean = top_values.mean()
+            contextual_candidates = encoded_candidates + global_context.unsqueeze(0)
+            candidate_logits = self.candidate_score(contextual_candidates).squeeze(-1)
         else:
-            encoded_candidates = self.empty_candidate.unsqueeze(0)
             candidate_logits = torch.empty(0, dtype=torch.float32, device=device)
             candidate_attention = torch.empty(0, dtype=torch.float32, device=device)
-            attention_embedding = self.empty_candidate
-            critical_embedding = self.empty_candidate
-            max_score = torch.zeros((), dtype=torch.float32, device=device)
-            top2_mean = max_score
-
-        sample_vector = torch.cat(
-            [
-                attention_embedding,
-                critical_embedding,
-                max_score.reshape(1),
-                top2_mean.reshape(1),
-            ]
-        )
-        return MILForwardOutput(
-            sample_logit=self.sample_head(sample_vector).squeeze(),
+        return CandidateForwardOutput(
             candidate_logits=candidate_logits,
             candidate_attention=candidate_attention,
             bundle_attention=bundle_weights,

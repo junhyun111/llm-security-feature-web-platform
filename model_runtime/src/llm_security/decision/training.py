@@ -1,10 +1,13 @@
-"""Public sample-level training API.
+"""Public candidate-level decision training API."""
 
-The former bundle-row LogisticRegression path is intentionally removed. Labels
-belong to complete samples and are consumed by Hierarchical MIL.
-"""
+from .mil.artifact import CandidateDecisionArtifact
+from .mil.training import (
+    CandidateDecisionTrainingConfig,
+    train_candidate_decision_model,
+)
 
-from .mil.artifact import MILArtifact
-from .mil.training import MILTrainingConfig, train_hierarchical_mil
-
-__all__ = ["MILArtifact", "MILTrainingConfig", "train_hierarchical_mil"]
+__all__ = [
+    "CandidateDecisionArtifact",
+    "CandidateDecisionTrainingConfig",
+    "train_candidate_decision_model",
+]

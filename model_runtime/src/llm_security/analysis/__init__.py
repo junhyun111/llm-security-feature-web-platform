@@ -52,7 +52,6 @@ from .ir import (
     SourceSpan,
     StatementIR,
 )
-from .legacy import LegacyRegexAnalyzer
 from .path_queries import (
     branch_reachability,
     is_reachable,
@@ -96,7 +95,6 @@ __all__ = [
     "FunctionAnalysis",
     "FunctionAnalysisIndex",
     "GuardRelation",
-    "LegacyRegexAnalyzer",
     "LearnedCandidateRanker",
     "build_related_function_summaries",
     "MemoryAccess",
