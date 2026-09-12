@@ -103,7 +103,7 @@ class CandidateGate:
         labels: list[int],
         *,
         sample_ids: list[str] | None = None,
-        target_recall: float = 0.98,
+        target_recall: float = 0.985,
     ) -> GateCalibration:
         """Select the highest validation threshold meeting candidate recall."""
 

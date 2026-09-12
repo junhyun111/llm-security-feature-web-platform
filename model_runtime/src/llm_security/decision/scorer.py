@@ -48,7 +48,7 @@ class CalibratedFindingScorer:
 
 
 class MILDecisionScorer:
-    """Produce exactly one calibrated probability for a complete sample."""
+    """Score global case context and every candidate in one MIL forward pass."""
 
     def __init__(
         self,

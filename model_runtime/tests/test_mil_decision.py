@@ -9,6 +9,7 @@ import torch
 
 from llm_security.aggregation import EvidenceAggregator
 from llm_security.config import AppConfig
+from llm_security.cwe import causal_cwe_family
 from llm_security.decision import (
     DecisionInputBuilder,
     HierarchicalMIL,
@@ -26,6 +27,7 @@ from llm_security.models import (
     Evidence,
     ExpertEvidence,
     ExpertFamily,
+    GroundTruth,
     ProjectCase,
     RouteDecision,
     ValidationVerdict,
@@ -110,6 +112,35 @@ class FixedMILScorer:
             {candidate.candidate_id: {bundle_id: 1.0}},
             candidate.candidate_id,
             bundle_id,
+        )
+
+
+class FixedMultiCandidateScorer:
+    low_threshold = 0.28
+    high_threshold = 0.71
+
+    def __init__(self, probabilities: dict[str, float]) -> None:
+        self.probabilities = probabilities
+
+    def score(self, case):
+        bundle_attention = {
+            candidate.candidate_id: {
+                bundle.bundle_id: 1.0 / len(candidate.bundles)
+                for bundle in candidate.bundles
+            }
+            for candidate in case.candidates
+        }
+        top_candidate_id = max(self.probabilities, key=self.probabilities.get)
+        top_bundles = bundle_attention.get(top_candidate_id, {})
+        return CaseDecisionScore(
+            case.sample_id,
+            0.05,
+            0.05,
+            dict(self.probabilities),
+            {candidate.candidate_id: 0.5 for candidate in case.candidates},
+            bundle_attention,
+            top_candidate_id,
+            next(iter(top_bundles), None),
         )
 
 
@@ -213,6 +244,192 @@ class HierarchicalMILTest(unittest.TestCase):
         self.assertEqual(ValidationVerdict.REJECTED, result.validations[0].verdict)
         self.assertTrue(result.validations[0].checks["deterministic_counterproof"])
         self.assertTrue(result.findings[0].evidence_against)
+
+    def test_pipeline_emits_every_qualifying_candidate_and_cwe_bundle(self) -> None:
+        first = make_candidate("C1")
+        second = Candidate(
+            "C2",
+            "project",
+            "parse.c",
+            "parse",
+            10,
+            15,
+            "int parse(void) { return size + 1; }",
+            [Evidence("E2", "integer_arithmetic", "parse.c", 12, "size + 1", "parse")],
+            {},
+            0.8,
+        )
+        below_threshold = Candidate(
+            "C3",
+            "project",
+            "safe.c",
+            "safe",
+            20,
+            22,
+            "int safe(void) { return 0; }",
+            [],
+            {},
+            0.1,
+        )
+        observations = [
+            observation(),
+            ExpertEvidence(
+                "C1",
+                ExpertFamily.INTEGER_SIZE_TYPE,
+                "support",
+                causal_cwe_family("CWE-190"),
+                ["CWE-190"],
+                ["E1"],
+                "n",
+                "memcpy",
+                ["n", "memcpy"],
+                [],
+                0.8,
+            ),
+            ExpertEvidence(
+                "C2",
+                ExpertFamily.INTEGER_SIZE_TYPE,
+                "support",
+                causal_cwe_family("CWE-190"),
+                ["CWE-190"],
+                ["E2"],
+                "size",
+                "size + 1",
+                ["size", "size + 1"],
+                [],
+                0.8,
+            ),
+        ]
+        expert_output = SimpleNamespace(
+            evidence=observations,
+            findings=[],
+            usage=[],
+            errors=[],
+            task_count=3,
+            submitted_task_count=3,
+            completed_task_count=3,
+            failed_task_count=0,
+            skipped_task_count=0,
+            failures=[],
+        )
+        routes = {
+            "C1": RouteDecision(
+                "C1",
+                {
+                    ExpertFamily.MEMORY_SAFETY: 0.9,
+                    ExpertFamily.INTEGER_SIZE_TYPE: 0.8,
+                },
+                [ExpertFamily.MEMORY_SAFETY, ExpertFamily.INTEGER_SIZE_TYPE],
+                0.9,
+                0.1,
+                "test",
+                [],
+            ),
+            "C2": route("C2"),
+            "C3": route("C3"),
+        }
+        pipeline = VulnerabilityPipeline(
+            analyzer=SimpleNamespace(
+                analyze=lambda _case: [first, second, below_threshold]
+            ),
+            router=SimpleNamespace(route=lambda candidate: routes[candidate.candidate_id]),
+            expert_runner=SimpleNamespace(run=lambda _candidates, _routes: expert_output),
+            aggregator=EvidenceAggregator(),
+            validator=EvidenceValidator(use_llm_for_uncertain=False),
+            mil_scorer=FixedMultiCandidateScorer(
+                {"C1": 0.91, "C2": 0.84, "C3": 0.27}
+            ),
+        )
+
+        result = pipeline.run(ProjectCase("S1", "project", {}))
+
+        self.assertEqual(3, len(result.findings))
+        self.assertEqual({"C1", "C2"}, {item.candidate_id for item in result.findings})
+        self.assertEqual(
+            {"CWE-787", "CWE-190"},
+            {item.cwes[0] for item in result.findings if item.candidate_id == "C1"},
+        )
+        self.assertTrue(all(item.probability >= 0.84 for item in result.findings))
+        self.assertTrue(
+            all(
+                item.checks["candidate_probability_scored"]
+                for item in result.validations
+            )
+        )
+
+    def test_pipeline_records_ground_truth_recall_by_stage(self) -> None:
+        candidate = make_candidate()
+        expert_output = SimpleNamespace(
+            evidence=[observation()],
+            findings=[],
+            usage=[],
+            errors=[],
+            task_count=1,
+            submitted_task_count=1,
+            completed_task_count=1,
+            failed_task_count=0,
+            skipped_task_count=0,
+            failures=[],
+        )
+        pipeline = VulnerabilityPipeline(
+            analyzer=SimpleNamespace(analyze=lambda _case: [candidate]),
+            router=SimpleNamespace(route=lambda _candidate: route()),
+            expert_runner=SimpleNamespace(run=lambda _candidates, _routes: expert_output),
+            aggregator=EvidenceAggregator(),
+            validator=EvidenceValidator(use_llm_for_uncertain=False),
+            mil_scorer=FixedMILScorer(),
+        )
+        case = ProjectCase(
+            "S1",
+            "project",
+            {"copy.c": candidate.code},
+            ground_truth=[
+                GroundTruth(
+                    "T1",
+                    "copy.c",
+                    "copy",
+                    3,
+                    3,
+                    [ExpertFamily.MEMORY_SAFETY],
+                    ["CWE-787"],
+                ),
+                GroundTruth(
+                    "T2",
+                    "missing.c",
+                    "missing",
+                    1,
+                    1,
+                    [ExpertFamily.MEMORY_SAFETY],
+                    ["CWE-787"],
+                ),
+            ],
+        )
+
+        result = pipeline.run(case)
+
+        self.assertIsNotNone(result.recall_trace)
+        assert result.recall_trace is not None
+        self.assertEqual(2, result.recall_trace.ground_truth_count)
+        self.assertEqual(
+            [
+                "static_candidate",
+                "candidate_gate",
+                "ranker_top_k",
+                "router",
+                "expert_evidence",
+                "mil_decision",
+                "validator_validated",
+            ],
+            [stage.stage for stage in result.recall_trace.stages],
+        )
+        self.assertTrue(
+            all(stage.retained_truth_ids == ["T1"] for stage in result.recall_trace.stages)
+        )
+        self.assertEqual({1: 0.5}, result.recall_trace.top_k_candidate_recall)
+        self.assertEqual(
+            ["T1"],
+            result.recall_trace.validator_verdict_truth_ids["validated"],
+        )
 
     def test_production_builder_requires_mil_artifact(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "Trained MIL decision model required"):

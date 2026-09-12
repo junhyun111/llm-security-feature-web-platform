@@ -58,29 +58,33 @@ class FindingReportBuilder:
         bundle: EvidenceBundle | None,
         *,
         fallback_expert: ExpertFamily,
+        probability: float | None = None,
     ) -> Finding:
+        candidate_probability = (
+            score.candidate_scores.get(candidate.candidate_id, 0.0)
+            if probability is None
+            else probability
+        )
         if bundle is not None:
             legacy = self.build(
                 ScoredEvidenceBundle(
                     bundle=bundle,
-                    probability=score.probability,
-                    raw_probability=score.raw_probability,
+                    probability=candidate_probability,
+                    raw_probability=candidate_probability,
                     features={},
                 ),
                 candidate,
             )
             legacy.decision_features = {
                 "sample_probability": score.probability,
-                "candidate_score": score.candidate_scores.get(
-                    candidate.candidate_id, 0.0
-                ),
+                "candidate_probability": candidate_probability,
                 "candidate_attention": score.candidate_attention.get(
                     candidate.candidate_id, 0.0
                 ),
             }
             return legacy
         return Finding(
-            finding_id=f"S-{score.sample_id}",
+            finding_id=f"S-{score.sample_id}-{candidate.candidate_id}",
             candidate_id=candidate.candidate_id,
             expert=fallback_expert,
             title="근거가 부족한 잠재적 취약점",
@@ -96,13 +100,11 @@ class FindingReportBuilder:
             missing_guard=None,
             trigger_path=[],
             evidence_ids=[],
-            confidence=score.probability,
+            confidence=candidate_probability,
             position="unknown",
-            probability=score.probability,
+            probability=candidate_probability,
             decision_features={
                 "sample_probability": score.probability,
-                "candidate_score": score.candidate_scores.get(
-                    candidate.candidate_id, 0.0
-                ),
+                "candidate_probability": candidate_probability,
             },
         )

@@ -22,9 +22,13 @@ class DecisionPolicy:
         deterministic_counterproof: bool,
         llm_falsified: bool = False,
         falsifier_failed: bool = False,
+        probability: float | None = None,
     ) -> ValidationResult:
-        high = score.probability >= self.high_threshold
-        low = score.probability < self.low_threshold
+        effective_probability = (
+            score.probability if probability is None else probability
+        )
+        high = effective_probability >= self.high_threshold
+        low = effective_probability < self.low_threshold
         counterproof = deterministic_counterproof or llm_falsified
         if counterproof:
             verdict = ValidationVerdict.REJECTED
@@ -47,9 +51,10 @@ class DecisionPolicy:
         return ValidationResult(
             finding_id=finding_id,
             verdict=verdict,
-            confidence=score.probability,
+            confidence=effective_probability,
             checks={
-                "sample_probability_scored": True,
+                "candidate_probability_scored": probability is not None,
+                "sample_probability_scored": probability is None,
                 "above_high_threshold": high,
                 "below_low_threshold": low,
                 "evidence_survives": evidence_survives,

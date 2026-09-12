@@ -956,6 +956,11 @@ class WebJobService:
                 if result.case_decision_score is not None
                 else None
             ),
+            "recall_trace": (
+                to_dict(result.recall_trace)
+                if result.recall_trace is not None
+                else None
+            ),
             "findings": bundles,
             "routes": [to_dict(item) for item in result.routes],
             "structural_validations": [

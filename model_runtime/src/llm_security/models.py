@@ -328,6 +328,26 @@ class ValidationResult:
 
 
 @dataclass(slots=True)
+class RecallStageTrace:
+    stage: str
+    retained_truth_count: int
+    ground_truth_count: int
+    recall: float
+    retained_truth_ids: list[str] = field(default_factory=list)
+    dropped_truth_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class PipelineRecallTrace:
+    """Ground-truth survival through each lossy pipeline stage."""
+
+    ground_truth_count: int
+    stages: list[RecallStageTrace] = field(default_factory=list)
+    top_k_candidate_recall: dict[int, float] = field(default_factory=dict)
+    validator_verdict_truth_ids: dict[str, list[str]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class UsageRecord:
     model: str
     provider: str | None = None
@@ -348,6 +368,7 @@ class PipelineResult:
     usage: list[UsageRecord]
     structural_validations: list[ValidationResult] = field(default_factory=list)
     pre_gate_candidates: list[Candidate] = field(default_factory=list)
+    post_gate_candidates: list[Candidate] = field(default_factory=list)
     gate_decisions: list[Any] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     expert_task_count: int = 0
@@ -366,6 +387,7 @@ class PipelineResult:
     scored_evidence: list[ScoredEvidenceBundle] = field(default_factory=list)
     case_decision_score: Any | None = None
     case_decision_input: Any | None = None
+    recall_trace: PipelineRecallTrace | None = None
 
     @property
     def validated_findings(self) -> list[Finding]:

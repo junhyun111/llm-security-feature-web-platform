@@ -20,14 +20,21 @@ class EvidenceAggregator:
             if isinstance(candidates, dict)
             else {item.candidate_id: item for item in candidates}
         )
-        buckets: dict[tuple[str, str], list[ExpertEvidence]] = defaultdict(list)
+        buckets: dict[tuple[str, str, tuple[str, ...]], list[ExpertEvidence]] = (
+            defaultdict(list)
+        )
         for item in evidence:
             if item.position == "oppose" or item.candidate_id not in candidate_by_id:
                 continue
-            buckets[(item.candidate_id, item.vulnerability_family)].append(item)
+            # Distinct CWE hypotheses remain distinct findings even when they
+            # occur in the same function and cite the same sink/evidence.
+            cwe_identity = tuple(sorted(set(item.cwes)))
+            buckets[
+                (item.candidate_id, item.vulnerability_family, cwe_identity)
+            ].append(item)
 
         bundles: list[EvidenceBundle] = []
-        for (candidate_id, family), bucket in buckets.items():
+        for (candidate_id, family, _cwes), bucket in buckets.items():
             candidate = candidate_by_id[candidate_id]
             for group in self._groups(bucket):
                 bundles.append(self._fuse(candidate, family, group))
@@ -74,7 +81,13 @@ class EvidenceAggregator:
         support = [item for item in group if item.position == "support"]
         unknown = [item for item in group if item.position != "support"]
         identity = "|".join(
-            [candidate.candidate_id, family, *evidence_ids, *sorted(item.sink or "" for item in group)]
+            [
+                candidate.candidate_id,
+                family,
+                *sorted({cwe for item in group for cwe in item.cwes}),
+                *evidence_ids,
+                *sorted(item.sink or "" for item in group),
+            ]
         )
         bundle_id = "B-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
         return EvidenceBundle(

@@ -174,6 +174,19 @@ export type AnalysisPayload = {
   findings: FindingBundle[]
   routes?: RouteDecision[]
   structural_validations?: ValidationResult[]
+  recall_trace?: {
+    ground_truth_count: number
+    stages: Array<{
+      stage: string
+      retained_truth_count: number
+      ground_truth_count: number
+      recall: number
+      retained_truth_ids: string[]
+      dropped_truth_ids: string[]
+    }>
+    top_k_candidate_recall: Record<string, number>
+    validator_verdict_truth_ids: Record<string, string[]>
+  } | null
   usage?: UsageRecord[]
   errors?: string[]
   expert_failures?: Array<{

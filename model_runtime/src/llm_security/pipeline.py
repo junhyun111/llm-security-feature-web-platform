@@ -14,8 +14,12 @@ from .experts import ExpertRunner
 from .models import (
     ExpertEvidence,
     ExpertFamily,
+    Finding,
+    GroundTruth,
+    PipelineRecallTrace,
     PipelineResult,
     ProjectCase,
+    RecallStageTrace,
     ValidationResult,
     ValidationVerdict,
 )
@@ -76,8 +80,10 @@ class VulnerabilityPipeline:
 
     def run(self, case: ProjectCase) -> PipelineResult:
         pre_gate_candidates = self.analyzer.analyze(case)
-        candidates, gate_decisions = self.candidate_gate.filter(pre_gate_candidates)
-        candidates.sort(
+        post_gate_candidates, gate_decisions = self.candidate_gate.filter(
+            pre_gate_candidates
+        )
+        post_gate_candidates.sort(
             key=lambda candidate: (
                 -candidate.suspicion_score,
                 candidate.file,
@@ -85,6 +91,7 @@ class VulnerabilityPipeline:
                 candidate.candidate_id,
             )
         )
+        candidates = list(post_gate_candidates)
         if self.max_candidates is not None:
             candidates = candidates[: self.max_candidates]
         routes = [self.router.route(candidate) for candidate in candidates]
@@ -93,6 +100,7 @@ class VulnerabilityPipeline:
             return self._run_legacy(
                 case,
                 pre_gate_candidates,
+                post_gate_candidates,
                 candidates,
                 gate_decisions,
                 routes,
@@ -101,6 +109,7 @@ class VulnerabilityPipeline:
         return self._run_mil(
             case,
             pre_gate_candidates,
+            post_gate_candidates,
             candidates,
             gate_decisions,
             routes,
@@ -111,6 +120,7 @@ class VulnerabilityPipeline:
         self,
         case,
         pre_gate_candidates,
+        post_gate_candidates,
         candidates,
         gate_decisions,
         routes,
@@ -164,6 +174,7 @@ class VulnerabilityPipeline:
             return self._result(
                 case,
                 pre_gate_candidates,
+                post_gate_candidates,
                 candidates,
                 gate_decisions,
                 routes,
@@ -180,79 +191,101 @@ class VulnerabilityPipeline:
         findings = []
         validations = []
         usage = list(expert_output.usage)
-        if case_score.top_candidate_id is not None:
-            candidate = candidate_by_id[case_score.top_candidate_id]
-            bundle = next(
-                (
-                    item
-                    for item in bundles
-                    if item.bundle_id == case_score.top_bundle_id
-                ),
-                None,
-            )
+        bundles_by_candidate = {
+            candidate_id: [
+                bundle for bundle in bundles if bundle.candidate_id == candidate_id
+            ]
+            for candidate_id in candidate_by_id
+        }
+        for candidate_id, candidate_probability in sorted(
+            case_score.candidate_scores.items(),
+            key=lambda item: (-item[1], item[0]),
+        ):
+            if candidate_probability < self.mil_scorer.low_threshold:  # type: ignore[union-attr]
+                continue
+            candidate = candidate_by_id.get(candidate_id)
+            if candidate is None:
+                continue
             route = next(item for item in routes if item.candidate_id == candidate.candidate_id)
             fallback_expert = next(
                 iter(route.selected or list(route.scores)),
                 ExpertFamily.CONTROL_STATE_ERROR,
             )
-            finding = self.report_builder.build_case(
-                case_score,
-                candidate,
-                bundle,
-                fallback_expert=fallback_expert,
+            candidate_bundles = sorted(
+                bundles_by_candidate.get(candidate_id, []),
+                key=lambda bundle: (
+                    -case_score.bundle_attention.get(candidate_id, {}).get(
+                        bundle.bundle_id, 0.0
+                    ),
+                    bundle.bundle_id,
+                ),
             )
-            evidence_survives = bool(
-                bundle
-                and bundle.support_count > 0
-                and bundle.evidence_ids
-                and set(bundle.evidence_ids).issubset(
-                    {item.evidence_id for item in candidate.evidence}
+            # A qualifying candidate can contain multiple independent CWE/root
+            # cause bundles. Emit all of them instead of collapsing the case to
+            # one top candidate/top bundle. Keep an evidence-less placeholder so
+            # the policy can mark it UNCERTAIN rather than silently dropping it.
+            for bundle in candidate_bundles or [None]:
+                finding = self.report_builder.build_case(
+                    case_score,
+                    candidate,
+                    bundle,
+                    fallback_expert=fallback_expert,
+                    probability=candidate_probability,
                 )
-            )
-            deterministic, _ = EvidenceFalsifier().run(finding, candidate)
-            llm_falsified = False
-            falsifier_failed = False
-            falsification_reason = deterministic.reason
-            if deterministic.falsified:
-                finding.evidence_against = [
-                    f"{item.file}:{item.line}: {item.expression}"
-                    for item in deterministic.counter_evidence
-                ]
-            elif (
-                evidence_survives
-                and case_score.probability >= self.mil_scorer.low_threshold  # type: ignore[union-attr]
-                and bool(getattr(self.validator, "use_llm_for_uncertain", True))
-                and self.falsifier.client is not None
-                and self.falsifier.model
-            ):
-                try:
-                    falsification, llm_usage = self.falsifier.run(finding, candidate)
-                    if llm_usage is not None:
-                        usage.append(llm_usage)
-                    llm_falsified = falsification.falsified
-                    falsification_reason = falsification.reason
-                    if llm_falsified:
-                        finding.evidence_against = [
-                            f"{item.file}:{item.line}: {item.expression}"
-                            for item in falsification.counter_evidence
-                        ]
-                except Exception as error:
-                    falsifier_failed = True
-                    falsification_reason = "Falsifier failed: " + str(error)[:300]
-            validation = self.decision_policy.decide_case(
-                case_score,
-                finding_id=finding.finding_id,
-                evidence_survives=evidence_survives,
-                deterministic_counterproof=deterministic.falsified,
-                llm_falsified=llm_falsified,
-                falsifier_failed=falsifier_failed,
-            )
-            validation.reasons.append(falsification_reason)
-            findings.append(finding)
-            validations.append(validation)
+                evidence_survives = bool(
+                    bundle
+                    and bundle.support_count > 0
+                    and bundle.evidence_ids
+                    and set(bundle.evidence_ids).issubset(
+                        {item.evidence_id for item in candidate.evidence}
+                    )
+                )
+                deterministic, _ = EvidenceFalsifier().run(finding, candidate)
+                llm_falsified = False
+                falsifier_failed = False
+                falsification_reason = deterministic.reason
+                if deterministic.falsified:
+                    finding.evidence_against = [
+                        f"{item.file}:{item.line}: {item.expression}"
+                        for item in deterministic.counter_evidence
+                    ]
+                elif (
+                    evidence_survives
+                    and candidate_probability >= self.mil_scorer.low_threshold  # type: ignore[union-attr]
+                    and bool(getattr(self.validator, "use_llm_for_uncertain", True))
+                    and self.falsifier.client is not None
+                    and self.falsifier.model
+                ):
+                    try:
+                        falsification, llm_usage = self.falsifier.run(finding, candidate)
+                        if llm_usage is not None:
+                            usage.append(llm_usage)
+                        llm_falsified = falsification.falsified
+                        falsification_reason = falsification.reason
+                        if llm_falsified:
+                            finding.evidence_against = [
+                                f"{item.file}:{item.line}: {item.expression}"
+                                for item in falsification.counter_evidence
+                            ]
+                    except Exception as error:
+                        falsifier_failed = True
+                        falsification_reason = "Falsifier failed: " + str(error)[:300]
+                validation = self.decision_policy.decide_case(
+                    case_score,
+                    finding_id=finding.finding_id,
+                    evidence_survives=evidence_survives,
+                    deterministic_counterproof=deterministic.falsified,
+                    llm_falsified=llm_falsified,
+                    falsifier_failed=falsifier_failed,
+                    probability=candidate_probability,
+                )
+                validation.reasons.append(falsification_reason)
+                findings.append(finding)
+                validations.append(validation)
         return self._result(
             case,
             pre_gate_candidates,
+            post_gate_candidates,
             candidates,
             gate_decisions,
             routes,
@@ -270,6 +303,7 @@ class VulnerabilityPipeline:
         self,
         case,
         pre_gate_candidates,
+        post_gate_candidates,
         candidates,
         gate_decisions,
         routes,
@@ -299,6 +333,7 @@ class VulnerabilityPipeline:
         return self._result(
             case,
             pre_gate_candidates,
+            post_gate_candidates,
             candidates,
             gate_decisions,
             routes,
@@ -316,6 +351,7 @@ class VulnerabilityPipeline:
         self,
         case,
         pre_gate_candidates,
+        post_gate_candidates,
         candidates,
         gate_decisions,
         routes,
@@ -344,6 +380,16 @@ class VulnerabilityPipeline:
             if failed_tasks or any(item.failed for item in validations) or expert_output.errors
             else "completed"
         )
+        recall_trace = _build_recall_trace(
+            case,
+            pre_gate_candidates=pre_gate_candidates,
+            post_gate_candidates=post_gate_candidates,
+            top_k_candidates=candidates,
+            routes=routes,
+            bundles=bundles,
+            findings=findings,
+            validations=validations,
+        )
         return PipelineResult(
             case_id=case.case_id,
             candidates=candidates,
@@ -353,6 +399,7 @@ class VulnerabilityPipeline:
             usage=usage,
             structural_validations=structural,
             pre_gate_candidates=pre_gate_candidates,
+            post_gate_candidates=post_gate_candidates,
             gate_decisions=gate_decisions,
             errors=expert_output.errors,
             expert_task_count=expert_output.task_count,
@@ -373,6 +420,7 @@ class VulnerabilityPipeline:
             scored_evidence=[],
             case_decision_score=case_score,
             case_decision_input=decision_input,
+            recall_trace=recall_trace,
         )
 
 
@@ -383,3 +431,147 @@ def _case_label(case: ProjectCase) -> int | None:
         value = int(case.metadata["label"])
         return value if value in {0, 1} else None
     return int(bool(case.ground_truth))
+
+
+def _build_recall_trace(
+    case: ProjectCase,
+    *,
+    pre_gate_candidates,
+    post_gate_candidates,
+    top_k_candidates,
+    routes,
+    bundles,
+    findings: list[Finding],
+    validations: list[ValidationResult],
+) -> PipelineRecallTrace | None:
+    truths = list(case.ground_truth)
+    if not truths:
+        return None
+
+    top_k_by_id = {candidate.candidate_id: candidate for candidate in top_k_candidates}
+    routes_by_id = {route.candidate_id: route for route in routes}
+    validation_by_id = {item.finding_id: item for item in validations}
+
+    static_ids = _truths_matching_candidates(truths, pre_gate_candidates)
+    gate_ids = _truths_matching_candidates(truths, post_gate_candidates)
+    top_k_ids = _truths_matching_candidates(truths, top_k_candidates)
+    router_ids = {
+        truth.truth_id
+        for truth in truths
+        if any(
+            _candidate_matches_truth(candidate, truth)
+            and _route_covers_truth(routes_by_id.get(candidate.candidate_id), truth)
+            for candidate in top_k_candidates
+        )
+    }
+    expert_ids = {
+        truth.truth_id
+        for truth in truths
+        if any(
+            bundle.support_count > 0
+            and (candidate := top_k_by_id.get(bundle.candidate_id)) is not None
+            and _candidate_matches_truth(candidate, truth)
+            and _cwes_match(bundle.cwes, truth.cwes)
+            for bundle in bundles
+        )
+    }
+    mil_ids = {
+        truth.truth_id
+        for truth in truths
+        if any(_finding_matches_truth(finding, truth) for finding in findings)
+    }
+    verdict_truth_ids = {
+        verdict.value: sorted(
+            truth.truth_id
+            for truth in truths
+            if any(
+                _finding_matches_truth(finding, truth)
+                and (validation := validation_by_id.get(finding.finding_id)) is not None
+                and validation.verdict == verdict
+                for finding in findings
+            )
+        )
+        for verdict in ValidationVerdict
+    }
+    validated_ids = set(verdict_truth_ids[ValidationVerdict.VALIDATED.value])
+    top_k_candidate_recall = {
+        k: len(_truths_matching_candidates(truths, post_gate_candidates[:k]))
+        / len(truths)
+        for k in range(1, len(post_gate_candidates) + 1)
+    }
+    stages = [
+        _recall_stage("static_candidate", truths, static_ids),
+        _recall_stage("candidate_gate", truths, gate_ids),
+        _recall_stage("ranker_top_k", truths, top_k_ids),
+        _recall_stage("router", truths, router_ids),
+        _recall_stage("expert_evidence", truths, expert_ids),
+        _recall_stage("mil_decision", truths, mil_ids),
+        _recall_stage("validator_validated", truths, validated_ids),
+    ]
+    return PipelineRecallTrace(
+        ground_truth_count=len(truths),
+        stages=stages,
+        top_k_candidate_recall=top_k_candidate_recall,
+        validator_verdict_truth_ids=verdict_truth_ids,
+    )
+
+
+def _recall_stage(
+    stage: str, truths: list[GroundTruth], retained_ids: set[str]
+) -> RecallStageTrace:
+    all_ids = {truth.truth_id for truth in truths}
+    retained = sorted(all_ids & retained_ids)
+    return RecallStageTrace(
+        stage=stage,
+        retained_truth_count=len(retained),
+        ground_truth_count=len(all_ids),
+        recall=len(retained) / len(all_ids),
+        retained_truth_ids=retained,
+        dropped_truth_ids=sorted(all_ids - set(retained)),
+    )
+
+
+def _truths_matching_candidates(truths, candidates) -> set[str]:
+    return {
+        truth.truth_id
+        for truth in truths
+        if any(_candidate_matches_truth(candidate, truth) for candidate in candidates)
+    }
+
+
+def _candidate_matches_truth(candidate, truth: GroundTruth) -> bool:
+    return (
+        candidate.file == truth.file
+        and candidate.line_start <= truth.line_end
+        and truth.line_start <= candidate.line_end
+        and (
+            not truth.function
+            or not candidate.function
+            or candidate.function == truth.function
+        )
+    )
+
+
+def _route_covers_truth(route, truth: GroundTruth) -> bool:
+    if route is None:
+        return False
+    selected = set(getattr(route, "selected", []) or [])
+    return not truth.experts or bool(selected & set(truth.experts))
+
+
+def _cwes_match(actual: list[str], expected: list[str]) -> bool:
+    return not expected or bool(set(actual) & set(expected))
+
+
+def _finding_matches_truth(finding: Finding, truth: GroundTruth) -> bool:
+    return (
+        finding.file == truth.file
+        and finding.line_start <= truth.line_end
+        and truth.line_start <= finding.line_end
+        and (
+            not truth.function
+            or not finding.function
+            or finding.function == truth.function
+        )
+        and _cwes_match(finding.cwes, truth.cwes)
+    )
