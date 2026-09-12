@@ -17,6 +17,7 @@ class RuntimePaths:
     env_file: Path
     router_artifact: Path
     candidate_ranker_artifact: Path
+    decision_artifact: Path
     workspace_root: Path
 
     @classmethod
@@ -38,13 +39,18 @@ class RuntimePaths:
             candidate_ranker_artifact=(
                 root / "artifacts" / "candidate_ranker.pkl"
             ).resolve(),
+            decision_artifact=(root / "artifacts" / "decision_layer.pt").resolve(),
             workspace_root=(root / "work").resolve(),
         )
 
     def require_artifacts(self) -> None:
         missing = [
             path
-            for path in (self.router_artifact, self.candidate_ranker_artifact)
+            for path in (
+                self.router_artifact,
+                self.candidate_ranker_artifact,
+                self.decision_artifact,
+            )
             if not path.is_file()
         ]
         if missing:
@@ -71,6 +77,7 @@ def configure_process_environment(paths: RuntimePaths) -> None:
     os.environ["ANALYSIS_BACKEND"] = "semantic"
     os.environ["CANDIDATE_RANKER_PATH"] = str(paths.candidate_ranker_artifact)
     os.environ["CANDIDATE_RANKER_REQUIRED"] = "true"
+    os.environ["DECISION_MODEL_PATH"] = str(paths.decision_artifact)
     os.environ["WEB_ROUTER_ARTIFACT"] = str(paths.router_artifact)
     os.environ["WEB_WORKSPACE_ROOT"] = str(paths.workspace_root)
 

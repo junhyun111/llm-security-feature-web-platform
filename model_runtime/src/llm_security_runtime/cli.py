@@ -26,7 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser(
-        "inspect", help="Validate router.pkl and candidate_ranker.pkl without API calls"
+        "inspect",
+        help="Validate router, candidate-ranker, and MIL decision artifacts without API calls",
     )
 
     analyze = subparsers.add_parser(

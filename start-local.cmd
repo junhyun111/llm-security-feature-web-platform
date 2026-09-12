@@ -70,6 +70,10 @@ if not exist "%LOCAL_ROOT%model_runtime\artifacts\candidate_ranker.pkl" (
   echo Runtime candidate-ranker artifact is missing: model_runtime\artifacts\candidate_ranker.pkl
   goto :failure
 )
+if not exist "%LOCAL_ROOT%model_runtime\artifacts\decision_layer.pt" (
+  echo Runtime MIL decision artifact is missing: model_runtime\artifacts\decision_layer.pt
+  goto :failure
+)
 
 if not exist "%LOCAL_LOG_DIR%" mkdir "%LOCAL_LOG_DIR%"
 if not exist "%LOCAL_ROOT%deploy-data\sqlite" mkdir "%LOCAL_ROOT%deploy-data\sqlite"
