@@ -7,7 +7,7 @@ from pathlib import Path
 
 import torch
 
-from ..calibration import select_validation_threshold
+from ..calibration import select_candidate_threshold, select_validation_threshold
 from .artifact import CandidateDecisionArtifact
 from .calibration import PlattCalibrator
 from .losses import ng_dsmil_loss
@@ -72,20 +72,18 @@ def train_candidate_decision_model(
     threshold_examples: list[BagTrainingExample],
     *,
     config: CandidateDecisionTrainingConfig | None = None,
-    candidate_threshold: float = 0.28,
     warm_start_path: str | Path | None = None,
     device: str | torch.device = "cpu",
 ) -> CandidateDecisionArtifact:
     """Fit NG-DSMIL from project-level labels only.
 
-    Calibration and threshold selection are performed on the DSMIL bag output;
-    candidate labels are neither required nor consumed.
+    The calibrator is fit only to DSMIL bag output. Epoch selection and verifier
+    thresholds use raw max-candidate probabilities, matching runtime inference.
+    Candidate labels are neither required nor consumed.
     """
 
     settings = config or CandidateDecisionTrainingConfig()
     _validate_config(settings)
-    if not 0.0 <= candidate_threshold <= 1.0:
-        raise ValueError("candidate_threshold must be a probability")
     for examples, split in (
         (train_examples, "train"),
         (validation_examples, "validation"),
@@ -149,8 +147,14 @@ def train_candidate_decision_model(
         model, calibration_examples
     )
     calibrator = PlattCalibrator().fit(calibration_raw, calibration_labels)
-    threshold_raw, threshold_labels = _raw_bag_probabilities(model, threshold_examples)
-    threshold_probabilities = calibrator.transform(threshold_raw).tolist()
+    threshold_probabilities, threshold_labels = _raw_max_candidate_probabilities(
+        model, threshold_examples
+    )
+    candidate_threshold = select_candidate_threshold(
+        threshold_probabilities,
+        threshold_labels,
+        target_recall=settings.target_recall,
+    )
     validation_threshold = max(
         candidate_threshold,
         select_validation_threshold(
@@ -217,7 +221,7 @@ def _recall_at_fpr_score(
     examples: list[BagTrainingExample],
     max_fpr: float,
 ) -> float:
-    probabilities, labels = _raw_bag_probabilities(model, examples)
+    probabilities, labels = _raw_max_candidate_probabilities(model, examples)
     thresholds = sorted({0.0, 1.0, *probabilities}, reverse=True)
     positives = sum(label == 1 for label in labels)
     negatives = sum(label == 0 for label in labels)
@@ -230,6 +234,23 @@ def _recall_at_fpr_score(
         score = recall if fpr <= max_fpr else recall - (fpr - max_fpr) * 2.0
         best = max(best, score)
     return best
+
+
+def _raw_max_candidate_probabilities(
+    model: NormalityGuidedDSMIL, examples: list[BagTrainingExample]
+) -> tuple[list[float], list[int]]:
+    """Bag proxy used wherever runtime candidate decisions are selected."""
+
+    model.eval()
+    probabilities: list[float] = []
+    with torch.no_grad():
+        for example in examples:
+            candidate_logits = model(example.case).candidate_logits
+            if not candidate_logits.numel():
+                probabilities.append(0.0)
+                continue
+            probabilities.append(float(torch.sigmoid(candidate_logits).max().item()))
+    return probabilities, [example.label for example in examples]
 
 
 def _require_bag_labels(

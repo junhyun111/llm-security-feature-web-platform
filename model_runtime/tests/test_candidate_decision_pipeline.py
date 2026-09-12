@@ -21,10 +21,12 @@ from llm_security.decision import (
     BagTrainingExample,
     bag_examples_from_cases,
     read_case_jsonl,
+    select_candidate_threshold,
     write_case_jsonl,
     train_candidate_decision_model,
 )
 from llm_security.decision.mil.losses import ng_dsmil_loss
+from llm_security.decision.mil.model import CandidateForwardOutput
 from llm_security.decision.verifier import EvidenceVerifier
 from llm_security.evaluation import RecallTracer
 from llm_security.evidence_processing import EvidenceProcessor
@@ -118,6 +120,25 @@ class FixedDecisionModel:
                 }
                 for candidate in case.candidates
             },
+        )
+
+
+class FixedForwardModel:
+    """Deterministic score source for scorer calibration-contract tests."""
+
+    def eval(self) -> None:
+        return None
+
+    def __call__(self, case) -> CandidateForwardOutput:
+        size = len(case.candidates)
+        return CandidateForwardOutput(
+            candidate_logits=torch.zeros(size),
+            bag_logit=torch.tensor(0.0),
+            sample_logit=torch.tensor(0.0),
+            candidate_attention=torch.full((size,), 1.0 / max(1, size)),
+            bundle_attention=[torch.empty(0) for _ in case.candidates],
+            candidate_embeddings=torch.empty(size, 64),
+            normality_similarity=torch.empty(size),
         )
 
 
@@ -227,6 +248,31 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
         self.assertEqual({"C1"}, set(output.candidate_probabilities))
         self.assertFalse(hasattr(output, "top_candidate_id"))
         self.assertFalse(hasattr(output, "top_bundle_id"))
+
+    def test_only_project_probability_uses_bag_calibration(self) -> None:
+        case = DecisionInputBuilder().build(
+            case_id="S1",
+            candidates=[candidate("C1")],
+            routes=[route("C1")],
+            bundles=[],
+            expert_output=SimpleNamespace(failures=[]),
+        )
+        output = CandidateDecisionModel(
+            FixedForwardModel(),  # type: ignore[arg-type]
+            PlattCalibrator(0.0, 2.0),
+            candidate_threshold=0.2,
+            validation_threshold=0.8,
+        ).predict(case)
+
+        self.assertAlmostEqual(0.5, output.candidate_probabilities["C1"])
+        self.assertAlmostEqual(0.880797, output.project_probability, places=5)
+
+    def test_candidate_threshold_preserves_target_recall(self) -> None:
+        threshold = select_candidate_threshold(
+            [0.92, 0.75, 0.80], [1, 1, 0], target_recall=0.5
+        )
+
+        self.assertEqual(0.92, threshold)
 
     def test_pipeline_emits_all_candidates_and_distinct_cwes(self) -> None:
         first = candidate("C1")

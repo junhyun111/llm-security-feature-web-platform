@@ -31,14 +31,13 @@ class CandidateDecisionModel:
         self.model.eval()
         with torch.no_grad():
             output = self.model(case)
-        raw = [
+        candidate_probabilities_raw = [
             float(torch.sigmoid(logit).item()) for logit in output.candidate_logits
         ]
-        calibrated = self.calibrator.transform(raw).tolist() if raw else []
         candidate_probabilities = {
             candidate.candidate_id: _bounded(float(probability))
             for candidate, probability in zip(
-                case.candidates, calibrated, strict=True
+                case.candidates, candidate_probabilities_raw, strict=True
             )
         }
         candidate_attention = {
@@ -61,9 +60,17 @@ class CandidateDecisionModel:
         return CandidateDecisionOutput(
             case_id=case.case_id,
             candidate_probabilities=candidate_probabilities,
-            project_probability=_bounded(float(torch.sigmoid(output.sample_logit).item())),
+            project_probability=_bounded(
+                float(
+                    self.calibrator.transform(
+                        [float(torch.sigmoid(output.sample_logit).item())]
+                    )[0]
+                )
+            ),
             candidate_attention=candidate_attention,
             bundle_attention=bundle_attention,
         )
+
+
 def _bounded(value: float) -> float:
     return max(0.0, min(1.0, value))

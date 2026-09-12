@@ -3,6 +3,33 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 
+def select_candidate_threshold(
+    probabilities: Sequence[float],
+    labels: Sequence[int],
+    *,
+    target_recall: float = 0.95,
+) -> float:
+    """Keep the highest max-candidate cutoff that preserves target recall."""
+
+    if not 0.0 < target_recall <= 1.0:
+        raise ValueError("target_recall must be between 0 and 1")
+    if len(probabilities) != len(labels) or not probabilities:
+        raise ValueError("probabilities and labels must be non-empty and equal length")
+    pairs = [(float(probability), int(label)) for probability, label in zip(probabilities, labels)]
+    positives = sum(label == 1 for _, label in pairs)
+    if not positives:
+        raise ValueError("candidate threshold selection requires vulnerable examples")
+    feasible: list[float] = []
+    for threshold in sorted({0.0, 1.0, *(value for value, _ in pairs)}, reverse=True):
+        recall = sum(
+            probability >= threshold and label == 1
+            for probability, label in pairs
+        ) / positives
+        if recall >= target_recall:
+            feasible.append(threshold)
+    return max(feasible) if feasible else 0.0
+
+
 def select_validation_threshold(
     probabilities: Sequence[float],
     labels: Sequence[int],

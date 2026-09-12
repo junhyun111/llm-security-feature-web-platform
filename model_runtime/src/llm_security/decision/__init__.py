@@ -1,6 +1,6 @@
 """Evidence-grounded candidate vulnerability decision layer."""
 
-from .calibration import select_validation_threshold
+from .calibration import select_candidate_threshold, select_validation_threshold
 from .dataset import (
     grouped_train_validation_test_indices,
     grouped_train_calibration_threshold_indices,
@@ -47,6 +47,7 @@ __all__ = [
     "load_encoder_warm_start",
     "grouped_train_calibration_threshold_indices",
     "read_case_jsonl",
+    "select_candidate_threshold",
     "select_validation_threshold",
     "train_candidate_decision_model",
     "write_case_jsonl",
