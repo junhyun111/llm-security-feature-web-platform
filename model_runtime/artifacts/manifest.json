@@ -13,7 +13,7 @@
   },
   "decision_model": {
     "file": "decision_layer.pt",
-    "schema": "hierarchical-mil-v1",
+    "schema": "normality-dsmil-v1",
     "replaceable": true,
     "validation_command": "run inspect"
   },

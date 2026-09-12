@@ -13,14 +13,18 @@ from llm_security.decision import (
     CandidateDecisionArtifact,
     CandidateDecisionOutput,
     CandidateDecisionModel,
+    CandidateDecisionTrainingConfig,
     DecisionInputBuilder,
     DecisionPolicy,
-    ContextualCandidateClassifier,
+    NormalityGuidedDSMIL,
     PlattCalibrator,
+    BagTrainingExample,
+    bag_examples_from_cases,
     read_case_jsonl,
     write_case_jsonl,
+    train_candidate_decision_model,
 )
-from llm_security.decision.mil.losses import candidate_classification_loss
+from llm_security.decision.mil.losses import ng_dsmil_loss
 from llm_security.decision.verifier import EvidenceVerifier
 from llm_security.evaluation import RecallTracer
 from llm_security.evidence_processing import EvidenceProcessor
@@ -143,7 +147,7 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
         self.assertEqual(0.8, calibration.threshold)
         self.assertEqual(2, calibration.retained_vulnerable_case_count)
 
-    def test_model_uses_global_context_for_candidate_logits(self) -> None:
+    def test_candidate_logits_are_independent_of_other_candidates(self) -> None:
         first = candidate("C1")
         second = candidate("C2", file="other.c", function="other", score=0.1)
         builder = DecisionInputBuilder()
@@ -162,38 +166,41 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
             bundles=[],
             expert_output=output,
         )
-        model = ContextualCandidateClassifier()
+        model = NormalityGuidedDSMIL()
         model.eval()
 
         with torch.no_grad():
-            one_logit = float(model(one).candidate_logits[0])
-            two_logit = float(model(two).candidate_logits[0])
+            one_logit = model(one).candidate_logits[0]
+            two_logit = model(two).candidate_logits[0]
 
-        self.assertNotEqual(one_logit, two_logit)
+        self.assertTrue(torch.allclose(one_logit, two_logit, atol=1e-6))
 
-    def test_candidate_loss_uses_one_label_per_candidate(self) -> None:
+    def test_ng_dsmil_loss_uses_one_label_per_bag(self) -> None:
         first = candidate("C1")
         second = candidate("C2", file="other.c", function="other")
-        case = DecisionInputBuilder().build(
-            case_id="labeled",
-            candidates=[first, second],
-            routes=[route("C1"), route("C2")],
+        positive = DecisionInputBuilder().build(
+            case_id="MIL-001-V",
+            candidates=[first],
+            routes=[route("C1")],
             bundles=[],
             expert_output=SimpleNamespace(failures=[]),
-            candidate_labels={"C1": 1, "C2": 0},
         )
-        model = ContextualCandidateClassifier()
-        output = model(case)
-        loss = candidate_classification_loss(
-            [output], [torch.tensor([1.0, 0.0])]
+        negative = DecisionInputBuilder().build(
+            case_id="MIL-002-S",
+            candidates=[second],
+            routes=[route("C2")],
+            bundles=[],
+            expert_output=SimpleNamespace(failures=[]),
         )
+        model = NormalityGuidedDSMIL()
+        loss = ng_dsmil_loss([model(positive), model(negative)], [1, 0])
         loss.backward()
 
         self.assertGreater(float(loss.detach()), 0.0)
 
     def test_artifact_and_output_have_no_top_candidate_schema(self) -> None:
         artifact = CandidateDecisionArtifact(
-            ContextualCandidateClassifier(),
+            NormalityGuidedDSMIL(),
             PlattCalibrator(1.0, 0.0),
             0.2,
             0.8,
@@ -308,14 +315,13 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
         )
         self.assertEqual({1: 0.5}, trace.top_k_candidate_recall)
 
-    def test_nested_jsonl_preserves_candidate_labels(self) -> None:
+    def test_nested_jsonl_reuses_features_without_candidate_labels(self) -> None:
         case = DecisionInputBuilder().build(
             case_id="S1",
             candidates=[candidate("C1")],
             routes=[route("C1")],
             bundles=[],
             expert_output=SimpleNamespace(failures=[]),
-            candidate_labels={"C1": 1},
             project_id="project",
             cve_id="CVE-1",
         )
@@ -324,7 +330,70 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
             write_case_jsonl(path, [case])
             restored = read_case_jsonl(path)
 
-        self.assertEqual(1, restored[0].candidates[0].label)
+        self.assertIsNone(restored[0].candidates[0].label)
+
+    def test_bag_examples_infer_existing_mil_case_suffixes(self) -> None:
+        builder = DecisionInputBuilder()
+        output = SimpleNamespace(failures=[])
+        cases = [
+            builder.build(
+                case_id="MIL-00001-V",
+                candidates=[candidate("C1")],
+                routes=[route("C1")],
+                bundles=[],
+                expert_output=output,
+            ),
+            builder.build(
+                case_id="MIL-00002-S",
+                candidates=[candidate("C2")],
+                routes=[route("C2")],
+                bundles=[],
+                expert_output=output,
+            ),
+        ]
+
+        examples = bag_examples_from_cases(cases)
+
+        self.assertEqual([1, 0], [example.label for example in examples])
+
+    def test_training_uses_bag_labels_without_candidate_labels(self) -> None:
+        builder = DecisionInputBuilder()
+        output = SimpleNamespace(failures=[])
+        positive = BagTrainingExample(
+            case=builder.build(
+                case_id="MIL-00001-V",
+                candidates=[candidate("C1", score=0.9)],
+                routes=[route("C1")],
+                bundles=[],
+                expert_output=output,
+            ),
+            label=1,
+        )
+        negative = BagTrainingExample(
+            case=builder.build(
+                case_id="MIL-00002-S",
+                candidates=[candidate("C2", score=0.1)],
+                routes=[route("C2")],
+                bundles=[],
+                expert_output=output,
+            ),
+            label=0,
+        )
+
+        artifact = train_candidate_decision_model(
+            [positive, negative],
+            [positive, negative],
+            [positive, negative],
+            [positive, negative],
+            config=CandidateDecisionTrainingConfig(
+                epochs=2,
+                batch_size=2,
+                early_stop_patience=1,
+            ),
+        )
+
+        self.assertEqual("normality-dsmil-v1", artifact.schema_version)
+        self.assertGreaterEqual(artifact.validation_threshold, artifact.candidate_threshold)
 
 
 if __name__ == "__main__":

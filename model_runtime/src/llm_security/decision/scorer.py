@@ -1,20 +1,18 @@
 from __future__ import annotations
 
-import math
-
 import torch
 
 from .mil.calibration import PlattCalibrator
-from .mil.model import ContextualCandidateClassifier
+from .mil.model import NormalityGuidedDSMIL
 from .mil.schema import CandidateDecisionContext, CandidateDecisionOutput
 
 
 class CandidateDecisionModel:
-    """Predict candidate vulnerabilities using shared global project context."""
+    """Predict independent candidate vulnerabilities with NG-DSMIL."""
 
     def __init__(
         self,
-        model: ContextualCandidateClassifier,
+        model: NormalityGuidedDSMIL,
         calibrator: PlattCalibrator,
         *,
         candidate_threshold: float,
@@ -63,18 +61,9 @@ class CandidateDecisionModel:
         return CandidateDecisionOutput(
             case_id=case.case_id,
             candidate_probabilities=candidate_probabilities,
-            project_probability=_project_probability(
-                candidate_probabilities.values()
-            ),
+            project_probability=_bounded(float(torch.sigmoid(output.sample_logit).item())),
             candidate_attention=candidate_attention,
             bundle_attention=bundle_attention,
         )
-
-
-def _project_probability(probabilities) -> float:
-    safe_probability = math.prod(1.0 - value for value in probabilities)
-    return _bounded(1.0 - safe_probability)
-
-
 def _bounded(value: float) -> float:
     return max(0.0, min(1.0, value))

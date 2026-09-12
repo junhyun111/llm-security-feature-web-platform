@@ -8,19 +8,19 @@ import torch
 
 from .calibration import PlattCalibrator
 from .model import (
-    ContextualCandidateClassifier,
-    ContextualCandidateClassifierConfig,
+    NormalityGuidedDSMIL,
+    NormalityGuidedDSMILConfig,
 )
 
 
 @dataclass(slots=True)
 class CandidateDecisionArtifact:
-    model: ContextualCandidateClassifier
+    model: NormalityGuidedDSMIL
     calibrator: PlattCalibrator
     candidate_threshold: float
     validation_threshold: float
     metadata: dict[str, Any] = field(default_factory=dict)
-    schema_version: str = "candidate-decision-v2"
+    schema_version: str = "normality-dsmil-v1"
 
     def save(self, path: str | Path) -> None:
         destination = Path(path)
@@ -49,18 +49,13 @@ class CandidateDecisionArtifact:
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             raise ValueError("Candidate decision artifact is unreadable") from exc
         schema = payload.get("schema_version") if isinstance(payload, dict) else None
-        if schema not in {"candidate-decision-v2", "hierarchical-mil-v1"}:
-            raise ValueError("Candidate decision artifact schema is incompatible")
-        config = ContextualCandidateClassifierConfig(**payload["model_config"])
-        model = ContextualCandidateClassifier(config)
-        state = dict(payload["model_state"])
-        if schema == "hierarchical-mil-v1":
-            state = {
-                key: value
-                for key, value in state.items()
-                if not key.startswith("sample_head.") and key != "empty_candidate"
-            }
-        model.load_state_dict(state, strict=True)
+        if schema != "normality-dsmil-v1":
+            raise ValueError(
+                "Decision model requires retraining with Normality-Guided DSMIL"
+            )
+        config = NormalityGuidedDSMILConfig(**payload["model_config"])
+        model = NormalityGuidedDSMIL(config)
+        model.load_state_dict(dict(payload["model_state"]), strict=True)
         model.eval()
         candidate_threshold = float(
             payload.get("candidate_threshold", payload.get("low_threshold"))
@@ -75,12 +70,5 @@ class CandidateDecisionArtifact:
             calibrator=PlattCalibrator.from_state_dict(payload["calibrator"]),
             candidate_threshold=candidate_threshold,
             validation_threshold=validation_threshold,
-            metadata={
-                **dict(payload.get("metadata", {})),
-                **(
-                    {"migrated_from": "hierarchical-mil-v1"}
-                    if schema == "hierarchical-mil-v1"
-                    else {}
-                ),
-            },
+            metadata=dict(payload.get("metadata", {})),
         )
