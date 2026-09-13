@@ -3,15 +3,14 @@ from .attention import GatedAttention
 from .calibration import PlattCalibrator
 from .encoder import BundleEncoder, CandidateEncoder
 from .losses import (
-    bag_classification_loss,
-    ng_dsmil_loss,
-    normality_loss,
-    ranking_loss,
+    asymmetric_mil_loss,
+    safe_candidate_loss,
+    vulnerable_bag_loss,
 )
 from .model import (
     CandidateForwardOutput,
-    NormalityGuidedDSMIL,
-    NormalityGuidedDSMILConfig,
+    DirectAsymmetricMIL,
+    DirectAsymmetricMILConfig,
 )
 from .schema import (
     BundleDecisionInput,
@@ -41,14 +40,13 @@ __all__ = [
     "CandidateDecisionContext",
     "DecisionInputBuilder",
     "GatedAttention",
-    "NormalityGuidedDSMIL",
-    "NormalityGuidedDSMILConfig",
+    "DirectAsymmetricMIL",
+    "DirectAsymmetricMILConfig",
     "PlattCalibrator",
-    "bag_classification_loss",
+    "asymmetric_mil_loss",
     "bag_examples_from_cases",
     "load_encoder_warm_start",
-    "ng_dsmil_loss",
-    "normality_loss",
-    "ranking_loss",
+    "safe_candidate_loss",
     "train_candidate_decision_model",
+    "vulnerable_bag_loss",
 ]

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import torch
-from torch.nn import functional as functional
+from torch.nn import functional
 
 from .model import CandidateForwardOutput
 
@@ -12,71 +12,51 @@ def _anchor(outputs: list[CandidateForwardOutput]) -> torch.Tensor:
     return outputs[0].sample_logit * 0.0
 
 
-def bag_classification_loss(
+def _validate_inputs(outputs: list[CandidateForwardOutput], labels: list[int]) -> None:
+    if len(outputs) != len(labels) or not outputs:
+        raise ValueError("one bag label is required per output")
+    if any(label not in {0, 1} for label in labels):
+        raise ValueError("bag labels must be 0 or 1")
+
+
+def vulnerable_bag_loss(
     outputs: list[CandidateForwardOutput], labels: list[int]
 ) -> torch.Tensor:
-    """Weak supervision: one safety label per project bag."""
-
-    if len(outputs) != len(labels) or not outputs:
-        raise ValueError("one bag label is required per model output")
-    logits = torch.stack([output.sample_logit for output in outputs])
-    targets = torch.tensor(labels, dtype=torch.float32, device=logits.device)
-    return functional.binary_cross_entropy_with_logits(logits, targets)
-
-
-def normality_loss(
-    outputs: list[CandidateForwardOutput], labels: list[int]
-) -> torch.Tensor:
-    """Pull candidate embeddings from known-safe bags toward normal prototypes."""
-
-    if len(outputs) != len(labels) or not outputs:
-        raise ValueError("one bag label is required per model output")
+    """Train non-empty vulnerable bags from their pooled candidate logit only."""
+    _validate_inputs(outputs, labels)
     losses = [
-        (1.0 - output.normality_similarity).mean()
+        functional.binary_cross_entropy_with_logits(
+            output.sample_logit, torch.ones_like(output.sample_logit)
+        )
         for output, label in zip(outputs, labels, strict=True)
-        if label == 0 and output.normality_similarity.numel()
+        if label == 1 and output.candidate_logits.numel()
     ]
     return torch.stack(losses).mean() if losses else _anchor(outputs)
 
 
-def ranking_loss(
-    outputs: list[CandidateForwardOutput],
-    labels: list[int],
-    *,
-    margin: float = 0.5,
+def safe_candidate_loss(
+    outputs: list[CandidateForwardOutput], labels: list[int]
 ) -> torch.Tensor:
-    """Separate the highest-risk instances in vulnerable and safe bags."""
-
-    if len(outputs) != len(labels) or not outputs:
-        raise ValueError("one bag label is required per model output")
-    if margin < 0:
-        raise ValueError("ranking margin must be non-negative")
-    positive_scores: list[torch.Tensor] = []
-    negative_scores: list[torch.Tensor] = []
-    for output, label in zip(outputs, labels, strict=True):
-        if not output.candidate_logits.numel():
-            continue
-        (positive_scores if label == 1 else negative_scores).append(
-            output.candidate_logits.max()
+    """Apply direct negative supervision to every candidate in safe bags."""
+    _validate_inputs(outputs, labels)
+    losses = [
+        functional.binary_cross_entropy_with_logits(
+            output.candidate_logits, torch.zeros_like(output.candidate_logits)
         )
-    if not positive_scores or not negative_scores:
-        return _anchor(outputs)
-    hardest_negative = torch.stack(negative_scores).max()
-    positives = torch.stack(positive_scores)
-    return functional.relu(margin - positives + hardest_negative).mean()
+        for output, label in zip(outputs, labels, strict=True)
+        if label == 0 and output.candidate_logits.numel()
+    ]
+    return torch.stack(losses).mean() if losses else _anchor(outputs)
 
 
-def ng_dsmil_loss(
+def asymmetric_mil_loss(
     outputs: list[CandidateForwardOutput],
     labels: list[int],
     *,
-    lambda_normal: float = 0.5,
-    lambda_rank: float = 0.5,
-    rank_margin: float = 0.5,
+    lambda_safe: float = 1.0,
 ) -> torch.Tensor:
-    if lambda_normal < 0 or lambda_rank < 0:
-        raise ValueError("loss weights must be non-negative")
-    bag = bag_classification_loss(outputs, labels)
-    normal = normality_loss(outputs, labels)
-    rank = ranking_loss(outputs, labels, margin=rank_margin)
-    return bag + lambda_normal * normal + lambda_rank * rank
+    if lambda_safe < 0:
+        raise ValueError("lambda_safe must be non-negative")
+    return vulnerable_bag_loss(outputs, labels) + lambda_safe * safe_candidate_loss(
+        outputs, labels
+    )

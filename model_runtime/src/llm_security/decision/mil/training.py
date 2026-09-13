@@ -10,8 +10,8 @@ import torch
 from ..calibration import select_candidate_threshold, select_validation_threshold
 from .artifact import CandidateDecisionArtifact
 from .calibration import PlattCalibrator
-from .losses import ng_dsmil_loss
-from .model import NormalityGuidedDSMIL
+from .losses import asymmetric_mil_loss
+from .model import DirectAsymmetricMIL, DirectAsymmetricMILConfig
 from .schema import CandidateDecisionContext
 
 
@@ -29,9 +29,8 @@ class CandidateDecisionTrainingConfig:
     learning_rate: float = 5e-4
     weight_decay: float = 1e-4
     batch_size: int = 16
-    lambda_normal: float = 0.5
-    lambda_rank: float = 0.5
-    rank_margin: float = 0.5
+    lambda_safe: float = 1.0
+    pooling_temperature: float = 0.5
     target_recall: float = 0.95
     max_fpr: float = 0.10
     early_stop_patience: int = 12
@@ -75,9 +74,9 @@ def train_candidate_decision_model(
     warm_start_path: str | Path | None = None,
     device: str | torch.device = "cpu",
 ) -> CandidateDecisionArtifact:
-    """Fit NG-DSMIL from project-level labels only.
+    """Fit Direct Asymmetric MIL from project-level labels only.
 
-    The calibrator is fit only to DSMIL bag output. Epoch selection and verifier
+    The calibrator is fit only to the pooled bag output. Epoch selection and verifier
     thresholds use raw max-candidate probabilities, matching runtime inference.
     Candidate labels are neither required nor consumed.
     """
@@ -94,7 +93,11 @@ def train_candidate_decision_model(
 
     random.seed(settings.seed)
     torch.manual_seed(settings.seed)
-    model = NormalityGuidedDSMIL().to(device)
+    model = DirectAsymmetricMIL(
+        DirectAsymmetricMILConfig(
+            pooling_temperature=settings.pooling_temperature,
+        )
+    ).to(device)
     warm_start_metadata: dict[str, object] = {}
     if warm_start_path is not None:
         missing, unexpected = load_encoder_warm_start(model, warm_start_path)
@@ -119,12 +122,10 @@ def train_candidate_decision_model(
         for start in range(0, len(shuffled), settings.batch_size):
             batch = shuffled[start : start + settings.batch_size]
             outputs = [model(example.case) for example in batch]
-            loss = ng_dsmil_loss(
+            loss = asymmetric_mil_loss(
                 outputs,
                 [example.label for example in batch],
-                lambda_normal=settings.lambda_normal,
-                lambda_rank=settings.lambda_rank,
-                rank_margin=settings.rank_margin,
+                lambda_safe=settings.lambda_safe,
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -140,7 +141,7 @@ def train_candidate_decision_model(
             if stale_epochs >= settings.early_stop_patience:
                 break
     if best_state is None:
-        raise RuntimeError("NG-DSMIL training did not produce a model state")
+        raise RuntimeError("Direct Asymmetric MIL training did not produce a model state")
     model.load_state_dict(best_state, strict=True)
 
     calibration_raw, calibration_labels = _raw_bag_probabilities(
@@ -185,9 +186,9 @@ def train_candidate_decision_model(
 
 
 def load_encoder_warm_start(
-    model: NormalityGuidedDSMIL, old_path: str | Path
+    model: DirectAsymmetricMIL, old_path: str | Path
 ) -> tuple[list[str], list[str]]:
-    """Reuse only encoders shared with the pre-NG-DSMIL architecture."""
+    """Reuse encoders shared with a prior decision-model artifact."""
 
     try:
         payload = torch.load(Path(old_path), map_location="cpu", weights_only=True)
@@ -205,7 +206,7 @@ def load_encoder_warm_start(
 
 
 def _raw_bag_probabilities(
-    model: NormalityGuidedDSMIL, examples: list[BagTrainingExample]
+    model: DirectAsymmetricMIL, examples: list[BagTrainingExample]
 ) -> tuple[list[float], list[int]]:
     model.eval()
     with torch.no_grad():
@@ -217,7 +218,7 @@ def _raw_bag_probabilities(
 
 
 def _recall_at_fpr_score(
-    model: NormalityGuidedDSMIL,
+    model: DirectAsymmetricMIL,
     examples: list[BagTrainingExample],
     max_fpr: float,
 ) -> float:
@@ -237,7 +238,7 @@ def _recall_at_fpr_score(
 
 
 def _raw_max_candidate_probabilities(
-    model: NormalityGuidedDSMIL, examples: list[BagTrainingExample]
+    model: DirectAsymmetricMIL, examples: list[BagTrainingExample]
 ) -> tuple[list[float], list[int]]:
     """Bag proxy used wherever runtime candidate decisions are selected."""
 
@@ -268,7 +269,9 @@ def _validate_config(config: CandidateDecisionTrainingConfig) -> None:
         raise ValueError("epochs, batch_size, and early_stop_patience must be positive")
     if config.learning_rate <= 0 or config.weight_decay < 0:
         raise ValueError("learning_rate must be positive and weight_decay non-negative")
-    if config.lambda_normal < 0 or config.lambda_rank < 0 or config.rank_margin < 0:
-        raise ValueError("loss weights and ranking margin must be non-negative")
+    if config.lambda_safe < 0:
+        raise ValueError("lambda_safe must be non-negative")
+    if config.pooling_temperature <= 0:
+        raise ValueError("pooling_temperature must be positive")
     if not 0 < config.target_recall <= 1 or not 0 <= config.max_fpr <= 1:
         raise ValueError("target_recall and max_fpr must be probabilities")

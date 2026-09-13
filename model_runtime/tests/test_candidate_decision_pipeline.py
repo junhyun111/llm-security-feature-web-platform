@@ -16,7 +16,7 @@ from llm_security.decision import (
     CandidateDecisionTrainingConfig,
     DecisionInputBuilder,
     DecisionPolicy,
-    NormalityGuidedDSMIL,
+    DirectAsymmetricMIL,
     PlattCalibrator,
     BagTrainingExample,
     bag_examples_from_cases,
@@ -25,7 +25,7 @@ from llm_security.decision import (
     write_case_jsonl,
     train_candidate_decision_model,
 )
-from llm_security.decision.mil.losses import ng_dsmil_loss
+from llm_security.decision.mil.losses import asymmetric_mil_loss
 from llm_security.decision.mil.model import CandidateForwardOutput
 from llm_security.decision.verifier import EvidenceVerifier
 from llm_security.evaluation import RecallTracer
@@ -133,12 +133,10 @@ class FixedForwardModel:
         size = len(case.candidates)
         return CandidateForwardOutput(
             candidate_logits=torch.zeros(size),
-            bag_logit=torch.tensor(0.0),
             sample_logit=torch.tensor(0.0),
             candidate_attention=torch.full((size,), 1.0 / max(1, size)),
             bundle_attention=[torch.empty(0) for _ in case.candidates],
             candidate_embeddings=torch.empty(size, 64),
-            normality_similarity=torch.empty(size),
         )
 
 
@@ -187,7 +185,7 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
             bundles=[],
             expert_output=output,
         )
-        model = NormalityGuidedDSMIL()
+        model = DirectAsymmetricMIL()
         model.eval()
 
         with torch.no_grad():
@@ -196,7 +194,32 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(one_logit, two_logit, atol=1e-6))
 
-    def test_ng_dsmil_loss_uses_one_label_per_bag(self) -> None:
+    def test_sample_logit_is_softmax_pooled_candidate_logit(self) -> None:
+        case = DecisionInputBuilder().build(
+            case_id="MIL-POOL-V",
+            candidates=[candidate("C1"), candidate("C2", file="other.c")],
+            routes=[route("C1"), route("C2")],
+            bundles=[],
+            expert_output=SimpleNamespace(failures=[]),
+        )
+        model = DirectAsymmetricMIL()
+        model.eval()
+
+        with torch.no_grad():
+            result = model(case)
+
+        expected_attention = torch.softmax(
+            result.candidate_logits / model.config.pooling_temperature, dim=0
+        )
+        self.assertTrue(torch.allclose(result.candidate_attention, expected_attention))
+        self.assertTrue(
+            torch.allclose(
+                result.sample_logit,
+                torch.sum(expected_attention * result.candidate_logits),
+            )
+        )
+
+    def test_asymmetric_mil_loss_uses_one_label_per_bag(self) -> None:
         first = candidate("C1")
         second = candidate("C2", file="other.c", function="other")
         positive = DecisionInputBuilder().build(
@@ -213,15 +236,15 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
             bundles=[],
             expert_output=SimpleNamespace(failures=[]),
         )
-        model = NormalityGuidedDSMIL()
-        loss = ng_dsmil_loss([model(positive), model(negative)], [1, 0])
+        model = DirectAsymmetricMIL()
+        loss = asymmetric_mil_loss([model(positive), model(negative)], [1, 0])
         loss.backward()
 
         self.assertGreater(float(loss.detach()), 0.0)
 
     def test_artifact_and_output_have_no_top_candidate_schema(self) -> None:
         artifact = CandidateDecisionArtifact(
-            NormalityGuidedDSMIL(),
+            DirectAsymmetricMIL(),
             PlattCalibrator(1.0, 0.0),
             0.2,
             0.8,
@@ -438,7 +461,7 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual("normality-dsmil-v1", artifact.schema_version)
+        self.assertEqual("direct-asymmetric-mil-v1", artifact.schema_version)
         self.assertGreaterEqual(artifact.validation_threshold, artifact.candidate_threshold)
 
 

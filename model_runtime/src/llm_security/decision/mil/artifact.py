@@ -8,19 +8,19 @@ import torch
 
 from .calibration import PlattCalibrator
 from .model import (
-    NormalityGuidedDSMIL,
-    NormalityGuidedDSMILConfig,
+    DirectAsymmetricMIL,
+    DirectAsymmetricMILConfig,
 )
 
 
 @dataclass(slots=True)
 class CandidateDecisionArtifact:
-    model: NormalityGuidedDSMIL
+    model: DirectAsymmetricMIL
     calibrator: PlattCalibrator
     candidate_threshold: float
     validation_threshold: float
     metadata: dict[str, Any] = field(default_factory=dict)
-    schema_version: str = "normality-dsmil-v1"
+    schema_version: str = "direct-asymmetric-mil-v1"
 
     def save(self, path: str | Path) -> None:
         destination = Path(path)
@@ -49,12 +49,12 @@ class CandidateDecisionArtifact:
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             raise ValueError("Candidate decision artifact is unreadable") from exc
         schema = payload.get("schema_version") if isinstance(payload, dict) else None
-        if schema != "normality-dsmil-v1":
+        if schema != "direct-asymmetric-mil-v1":
             raise ValueError(
-                "Decision model requires retraining with Normality-Guided DSMIL"
+                "Decision model requires retraining with Direct Asymmetric MIL"
             )
-        config = NormalityGuidedDSMILConfig(**payload["model_config"])
-        model = NormalityGuidedDSMIL(config)
+        config = DirectAsymmetricMILConfig(**payload["model_config"])
+        model = DirectAsymmetricMIL(config)
         model.load_state_dict(dict(payload["model_state"]), strict=True)
         model.eval()
         candidate_threshold = float(

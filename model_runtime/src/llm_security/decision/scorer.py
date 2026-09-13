@@ -3,16 +3,16 @@ from __future__ import annotations
 import torch
 
 from .mil.calibration import PlattCalibrator
-from .mil.model import NormalityGuidedDSMIL
+from .mil.model import DirectAsymmetricMIL
 from .mil.schema import CandidateDecisionContext, CandidateDecisionOutput
 
 
 class CandidateDecisionModel:
-    """Predict independent candidate vulnerabilities with NG-DSMIL."""
+    """Predict independent candidate vulnerabilities with Direct Asymmetric MIL."""
 
     def __init__(
         self,
-        model: NormalityGuidedDSMIL,
+        model: DirectAsymmetricMIL,
         calibrator: PlattCalibrator,
         *,
         candidate_threshold: float,

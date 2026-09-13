@@ -13,7 +13,7 @@
   },
   "decision_model": {
     "file": "decision_layer.pt",
-    "schema": "normality-dsmil-v1",
+    "schema": "direct-asymmetric-mil-v1",
     "replaceable": true,
     "validation_command": "run inspect"
   },
