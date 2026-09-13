@@ -24,6 +24,11 @@ candidate needs all five Experts. `EvidenceEscalationPolicy` makes that decision
 after real Top-2 responses: missing responses, UNCERTAIN, incomplete VULNERABLE
 proof, or SAFE without valid counter-evidence cause a remaining-three pass.
 
+Runtime metrics distinguish `escalation_requested_count` from
+`full5_completed_count`; a failed remaining-three request is never reported as a
+completed Full-5 review. Recall tracing separately records Top-2 coverage,
+Top-2 positive assessments, and positive assessments after escalation.
+
 ## Assessment contract
 
 Experts make the domain conclusion and return one `ExpertAssessment` for each

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections import defaultdict
 
-from .cwe import expert_for_cwe
+from .cwe import cwes_supported_by_evidence
 from .models import (
     Candidate,
     ExpertAssessment,
@@ -52,7 +52,13 @@ class EvidenceGate:
         route: RouteDecision | None,
         finding_id: str,
     ) -> ValidationResult:
-        evidence_ids = {item.evidence_id for item in candidate.evidence} if candidate else set()
+        evidence_by_id = {item.evidence_id: item for item in candidate.evidence} if candidate else {}
+        evidence_ids = set(evidence_by_id)
+        cited_evidence = [
+            evidence_by_id[evidence_id]
+            for evidence_id in assessment.evidence_ids
+            if evidence_id in evidence_by_id
+        ]
         checks: dict[str, bool | None] = {
             "candidate_attribution_valid": candidate is not None,
             # ``selected`` records the initial Top-2.  A ranked Expert can also
@@ -62,9 +68,9 @@ class EvidenceGate:
                 route.ranked_experts or route.selected
             ),
             "cwe_present": bool(assessment.cwes),
-            "cwe_domain_valid": bool(assessment.cwes) and all(
-                expert_for_cwe(cwe) == assessment.expert for cwe in assessment.cwes
-            ),
+            "cwe_evidence_supported": bool(assessment.cwes)
+            and bool(cited_evidence)
+            and cwes_supported_by_evidence(assessment.cwes, cited_evidence),
             "evidence_ids_valid": bool(assessment.evidence_ids)
             and set(assessment.evidence_ids).issubset(evidence_ids),
             "counter_evidence_ids_valid": set(assessment.counter_evidence_ids).issubset(

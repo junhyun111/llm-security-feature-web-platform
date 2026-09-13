@@ -66,8 +66,13 @@ class VulnerabilityPipeline:
             for escalation in escalations
             if escalation.escalated and escalation.remaining_experts
         }
+        escalation_candidates = [
+            candidate
+            for candidate in selection.selected
+            if candidate.candidate_id in remaining_by_candidate
+        ]
         escalation_output = self._run_experts(
-            selection.selected,
+            escalation_candidates,
             remaining_by_candidate,
             routes,
             phase="escalation",
@@ -111,7 +116,10 @@ class VulnerabilityPipeline:
             replace(route_by_id[candidate_id], selected=list(experts))
             for candidate_id, experts in experts_by_candidate.items()
         ]
-        return self.expert_runner.run(candidates, phased_routes)
+        selected_candidates = [
+            candidate for candidate in candidates if candidate.candidate_id in experts_by_candidate
+        ]
+        return self.expert_runner.run(selected_candidates, phased_routes)
 
 
 def _build_result(
@@ -127,10 +135,24 @@ def _build_result(
 ) -> PipelineResult:
     failed_tasks = getattr(expert_output, "failed_task_count", 0)
     cancelled = getattr(expert_output, "cancelled", False)
-    incomplete = getattr(expert_output, "incomplete_candidate_count", 0)
-    covered = getattr(expert_output, "covered_candidate_count", 0)
-    if not covered and getattr(expert_output, "completed_task_count", 0):
-        covered = max(0, len(selection.selected) - incomplete)
+    covered_ids = {
+        assessment.candidate_id for assessment in expert_output.assessments
+    }
+    covered = len(covered_ids)
+    incomplete = len({candidate.candidate_id for candidate in selection.selected} - covered_ids)
+    escalated_ids = {
+        escalation.candidate_id for escalation in escalations if escalation.escalated
+    }
+    completed_full5 = sum(
+        len(
+            {
+                assessment.expert
+                for assessment in expert_output.assessments
+                if assessment.candidate_id == candidate_id
+            }
+        ) >= 5
+        for candidate_id in escalated_ids
+    )
     status = (
         "cancelled"
         if cancelled
@@ -166,7 +188,9 @@ def _build_result(
         escalations=escalations,
         initial_expert_task_count=initial_expert_task_count,
         escalation_expert_task_count=escalation_expert_task_count,
-        full5_candidate_count=sum(item.escalated for item in escalations),
+        full5_candidate_count=len(escalated_ids),
+        escalation_requested_count=len(escalated_ids),
+        full5_completed_count=completed_full5,
     )
 
 
@@ -183,9 +207,9 @@ def _combine_expert_outputs(initial, escalation):
         submitted_task_count=initial.submitted_task_count + escalation.submitted_task_count,
         completed_task_count=initial.completed_task_count + escalation.completed_task_count,
         failed_task_count=initial.failed_task_count + escalation.failed_task_count,
-        incomplete_candidate_count=(
-            initial.incomplete_candidate_count + escalation.incomplete_candidate_count
-        ),
+        # Final pipeline-level coverage is computed from unique assessment
+        # candidate IDs, so do not double-count a candidate across phases.
+        incomplete_candidate_count=0,
         skipped_task_count=initial.skipped_task_count + escalation.skipped_task_count,
         recovered_task_count=initial.recovered_task_count + escalation.recovered_task_count,
         timed_out_task_count=initial.timed_out_task_count + escalation.timed_out_task_count,

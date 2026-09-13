@@ -199,6 +199,25 @@ class ParallelExpertRunnerTest(unittest.TestCase):
             ],
         )
 
+    def test_phased_execution_uses_distinct_task_ids_and_phase_metadata(self) -> None:
+        item = candidate(1)
+        client = ConcurrentClient(expected_concurrency=1)
+        runner = ParallelExpertRunner(
+            client=client,
+            model="test/model",
+            context_builder=ContextBuilder(),
+        )
+
+        runner.run_experts(
+            [item], {item.candidate_id: [ExpertFamily.MEMORY_BOUNDS]}, phase="initial"
+        )
+        runner.run_experts(
+            [item], {item.candidate_id: [ExpertFamily.INTEGER_SIZE_TYPE]}, phase="escalation"
+        )
+
+        self.assertEqual(["I00001", "X00001"], [call["metadata"]["task_id"] for call in client.calls])
+        self.assertEqual(["initial", "escalation"], [call["metadata"]["phase"] for call in client.calls])
+
     def test_independent_requests_are_bounded_and_failures_are_isolated(self) -> None:
         candidates = [candidate(index) for index in range(1, 4)]
         client = ConcurrentClient(

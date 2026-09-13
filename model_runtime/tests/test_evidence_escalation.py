@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 
 from llm_security.escalation import EvidenceEscalationPolicy
@@ -24,7 +25,8 @@ def candidate() -> Candidate:
         "C-1", "project", "copy.c", "copy", 10, 12, "memcpy(dst, src, n);",
         [
             Evidence("E-memory", "memory_sink", "copy.c", 11, "memcpy", "copy"),
-            Evidence("E-guard", "state", "copy.c", 10, "n <= sizeof(dst)", "copy"),
+            Evidence("E-guard", "guard_protects_sink", "copy.c", 10, "n <= sizeof(dst)", "copy"),
+            Evidence("E-state", "state", "copy.c", 10, "error result ignored", "copy"),
         ],
         {},
     )
@@ -134,15 +136,41 @@ class EvidenceEscalationPolicyTests(unittest.TestCase):
         self.assertIn("preconditions", decision.missing_requirements)
         self.assertTrue(any("weak SAFE" in reason for reason in decision.reasons))
 
+    def test_safe_cannot_use_non_protective_evidence_as_counter_proof(self) -> None:
+        self.candidate.evidence.append(
+            Evidence("E-nonprotective", "memory_sink", "copy.c", 11, "memcpy", "copy")
+        )
+        decision = self.policy.decide(
+            candidate=self.candidate,
+            route=self.route,
+            assessments=[
+                assessment(
+                    ExpertFamily.MEMORY_SAFETY,
+                    ExpertVerdict.SAFE,
+                    counter_evidence_ids=["E-nonprotective"],
+                ),
+                assessment(
+                    ExpertFamily.INTEGER_SIZE_TYPE,
+                    ExpertVerdict.SAFE,
+                    counter_evidence_ids=["E-guard"],
+                ),
+            ],
+        )
+
+        self.assertTrue(decision.escalated)
+        self.assertTrue(any("weak SAFE" in reason for reason in decision.reasons))
+
 
 class _PhasedRunner:
     def __init__(self, initial: list[ExpertAssessment], escalation: list[ExpertAssessment]) -> None:
         self.initial = initial
         self.escalation = escalation
         self.calls: list[tuple[str, dict[str, list[ExpertFamily]]]] = []
+        self.call_candidate_ids: list[set[str]] = []
 
     def run_experts(self, candidates, experts_by_candidate, *, phase: str) -> ExpertRunOutput:
         self.calls.append((phase, experts_by_candidate))
+        self.call_candidate_ids.append({candidate.candidate_id for candidate in candidates})
         available = {
             (candidate_id, expert)
             for candidate_id, experts in experts_by_candidate.items()
@@ -181,7 +209,7 @@ class EvidenceEscalationPipelineTests(unittest.TestCase):
                     ExpertFamily.CONTROL_STATE_ERROR,
                     ExpertVerdict.VULNERABLE,
                     cwes=["CWE-703"],
-                    evidence_ids=["E-guard"],
+                    evidence_ids=["E-state"],
                     preconditions=["error result is ignored"],
                 ),
             ],
@@ -201,8 +229,42 @@ class EvidenceEscalationPipelineTests(unittest.TestCase):
         self.assertEqual(2, result.initial_expert_task_count)
         self.assertEqual(3, result.escalation_expert_task_count)
         self.assertEqual(1, result.full5_candidate_count)
+        self.assertEqual(1, result.escalation_requested_count)
+        self.assertEqual(0, result.full5_completed_count)
         self.assertTrue(result.escalations[0].escalated)
         self.assertEqual(["CWE-703"], result.findings[0].cwes)
+
+    def test_escalation_runner_receives_only_candidates_that_need_remaining_three(self) -> None:
+        candidates = [
+            replace(candidate(), candidate_id=candidate_id)
+            for candidate_id in ("C-1", "C-2", "C-3")
+        ]
+
+        def for_candidate(candidate_id: str, expert: ExpertFamily, verdict: ExpertVerdict):
+            return replace(assessment(expert, verdict, counter_evidence_ids=["E-guard"]), candidate_id=candidate_id)
+
+        runner = _PhasedRunner(
+            initial=[
+                for_candidate("C-1", ExpertFamily.MEMORY_SAFETY, ExpertVerdict.SAFE),
+                for_candidate("C-1", ExpertFamily.INTEGER_SIZE_TYPE, ExpertVerdict.SAFE),
+                for_candidate("C-2", ExpertFamily.MEMORY_SAFETY, ExpertVerdict.SAFE),
+                for_candidate("C-2", ExpertFamily.INTEGER_SIZE_TYPE, ExpertVerdict.UNCERTAIN),
+                for_candidate("C-3", ExpertFamily.MEMORY_SAFETY, ExpertVerdict.SAFE),
+                for_candidate("C-3", ExpertFamily.INTEGER_SIZE_TYPE, ExpertVerdict.SAFE),
+            ],
+            escalation=[],
+        )
+        pipeline = VulnerabilityPipeline(
+            analyzer=SimpleNamespace(analyze=lambda _case: candidates),
+            selector=CandidateSelector(threshold_enabled=False),
+            router=SimpleNamespace(route=lambda item: replace(route(), candidate_id=item.candidate_id)),
+            expert_runner=runner,
+        )
+
+        pipeline.run(ProjectCase("case", "project", {}))
+
+        self.assertEqual({"C-1", "C-2", "C-3"}, runner.call_candidate_ids[0])
+        self.assertEqual({"C-2"}, runner.call_candidate_ids[1])
 
 
 if __name__ == "__main__":

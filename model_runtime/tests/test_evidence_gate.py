@@ -89,14 +89,30 @@ class EvidenceGateTests(unittest.TestCase):
         self.assertEqual(ValidationVerdict.REJECTED, validations[0].verdict)
         self.assertFalse(validations[0].checks["evidence_ids_valid"])
 
-    def test_cwe_outside_the_routed_expert_domain_is_rejected(self) -> None:
+    def test_cwe_without_supporting_static_evidence_is_rejected(self) -> None:
         item = assessment(ExpertVerdict.VULNERABLE)
         item.cwes = ["CWE-190"]
         findings, validations = EvidenceGate().process([item], [candidate()], [route()])
 
         self.assertEqual([], findings)
         self.assertEqual(ValidationVerdict.REJECTED, validations[0].verdict)
-        self.assertFalse(validations[0].checks["cwe_domain_valid"])
+        self.assertFalse(validations[0].checks["cwe_evidence_supported"])
+
+    def test_causal_integer_to_memory_chain_is_accepted_when_evidence_supports_it(self) -> None:
+        item = assessment(ExpertVerdict.VULNERABLE)
+        item.cwes = ["CWE-190", "CWE-787"]
+        chain_candidate = candidate()
+        chain_candidate.evidence = [
+            Evidence(
+                "E-1", "arithmetic_to_memory_sink", "copy.c", 11,
+                "size * count reaches memcpy length", "copy",
+            )
+        ]
+
+        findings, validations = EvidenceGate().process([item], [chain_candidate], [route()])
+
+        self.assertEqual(1, len(findings))
+        self.assertTrue(validations[0].checks["cwe_evidence_supported"])
 
 
 if __name__ == "__main__":

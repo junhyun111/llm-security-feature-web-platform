@@ -10,6 +10,13 @@ from .models import (
     RouteDecision,
 )
 
+PROTECTIVE_EVIDENCE_KINDS = frozenset({
+    "guard_protects_sink",
+    "guard",
+    "lock_acquire",
+    "lock_release",
+})
+
 
 class EvidenceEscalationPolicy:
     """Escalate from the initial Top-2 only when their evidence is insufficient."""
@@ -95,6 +102,14 @@ def _vulnerability_proof_complete(
 
 
 def _safe_proof_complete(assessment: ExpertAssessment, candidate: Candidate) -> bool:
-    return bool(assessment.counter_evidence_ids) and set(
-        assessment.counter_evidence_ids
-    ).issubset({item.evidence_id for item in candidate.evidence})
+    evidence_by_id = {item.evidence_id: item for item in candidate.evidence}
+    cited = [
+        evidence_by_id[evidence_id]
+        for evidence_id in assessment.counter_evidence_ids
+        if evidence_id in evidence_by_id
+    ]
+    return (
+        bool(cited)
+        and len(cited) == len(assessment.counter_evidence_ids)
+        and any(item.kind in PROTECTIVE_EVIDENCE_KINDS for item in cited)
+    )

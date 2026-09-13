@@ -196,10 +196,7 @@ class RequestAwareWebJobService(WebJobService):
             }
             for finding in result.findings
         ]
-        validated = sum(
-            item.verdict == ValidationVerdict.VALIDATED
-            for item in result.validations
-        )
+        validated = len(result.validated_findings)
         review = sum(
             item.verdict == ValidationVerdict.UNCERTAIN
             for item in result.validations
@@ -241,9 +238,16 @@ class RequestAwareWebJobService(WebJobService):
                 "expert_task_count": result.expert_task_count,
                 "initial_expert_task_count": result.initial_expert_task_count,
                 "escalation_expert_task_count": result.escalation_expert_task_count,
+                "escalation_requested_count": result.escalation_requested_count,
                 "full5_candidate_count": result.full5_candidate_count,
+                "full5_completed_count": result.full5_completed_count,
                 "full5_rate": (
-                    result.full5_candidate_count / len(result.candidates)
+                    result.escalation_requested_count / len(result.candidates)
+                    if result.candidates
+                    else 0.0
+                ),
+                "full5_completed_rate": (
+                    result.full5_completed_count / len(result.candidates)
                     if result.candidates
                     else 0.0
                 ),

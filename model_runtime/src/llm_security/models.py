@@ -399,7 +399,9 @@ class PipelineResult:
     escalations: list[EscalationDecision] = field(default_factory=list)
     initial_expert_task_count: int = 0
     escalation_expert_task_count: int = 0
+    escalation_requested_count: int = 0
     full5_candidate_count: int = 0
+    full5_completed_count: int = 0
     candidate_decision_output: Any | None = None
     candidate_decision_input: Any | None = None
 

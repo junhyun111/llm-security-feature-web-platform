@@ -49,3 +49,5 @@ jobs:
         run: pip install ./model_runtime
       - name: Inspect model artifacts
         run: python model_runtime/run.py inspect
+      - name: Run runtime tests
+        run: python -m unittest discover -s model_runtime/tests -p "test_*.py"

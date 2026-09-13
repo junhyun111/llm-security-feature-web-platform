@@ -119,6 +119,8 @@ class ExpertRunner:
         task_count = 0
         completed_task_count = 0
         for candidate_id, experts in experts_by_candidate.items():
+            if candidate_id not in by_id:
+                continue
             candidate = by_id[candidate_id]
             assignments = [
                 ExpertAssignment(
@@ -139,6 +141,8 @@ class ExpertRunner:
                         response_schema=expert_assessment_schema(),
                         metadata={
                             "task": "expert",
+                            "task_id": _phase_task_id(phase, task_count),
+                            "phase": phase,
                             "candidate": candidate,
                             "expert": expert,
                             "assignment": assignment,
@@ -173,6 +177,7 @@ class ExpertRunner:
 @dataclass(frozen=True, slots=True)
 class ExpertTask:
     task_id: str
+    phase: str
     candidate: Candidate
     assignment: ExpertAssignment
 
@@ -229,9 +234,11 @@ class ParallelExpertRunner:
         self,
         candidates: list[Candidate],
         routes: list[RouteDecision],
+        *,
+        phase: str = "legacy",
     ) -> ExpertRunOutput:
         self._raise_if_cancelled()
-        tasks = self._build_tasks(candidates, routes)
+        tasks = self._build_tasks(candidates, routes, phase=phase)
         total = len(tasks)
         if not tasks:
             self._notify_progress(
@@ -490,12 +497,21 @@ class ParallelExpertRunner:
         *,
         phase: str,
     ) -> ExpertRunOutput:
-        return self.run(candidates, _routes_for_experts(experts_by_candidate))
+        selected_candidates = [
+            candidate for candidate in candidates if candidate.candidate_id in experts_by_candidate
+        ]
+        return self.run(
+            selected_candidates,
+            _routes_for_experts(experts_by_candidate),
+            phase=phase,
+        )
 
     def _build_tasks(
         self,
         candidates: list[Candidate],
         routes: list[RouteDecision],
+        *,
+        phase: str = "legacy",
     ) -> list[ExpertTask]:
         routes_by_id = {route.candidate_id: route for route in routes}
         desired: dict[str, list[ExpertFamily]] = {}
@@ -533,7 +549,8 @@ class ParallelExpertRunner:
 
         return [
             ExpertTask(
-                task_id=f"T{index:05d}",
+                task_id=_phase_task_id(phase, index),
+                phase=phase,
                 candidate=candidate,
                 assignment=ExpertAssignment(
                     expert=expert,
@@ -561,6 +578,7 @@ class ParallelExpertRunner:
             metadata={
                 "task": "expert",
                 "task_id": task.task_id,
+                "phase": task.phase,
                 "candidate_id": candidate.candidate_id,
                 "expert": expert.value,
                 "exclude_provider": excluded_provider,
@@ -615,6 +633,11 @@ def _routes_for_experts(
         )
         for candidate_id, experts in experts_by_candidate.items()
     ]
+
+
+def _phase_task_id(phase: str, index: int) -> str:
+    prefix = {"initial": "I", "escalation": "X"}.get(phase, "T")
+    return f"{prefix}{index:05d}"
 
 
 def _task_failure(task: ExpertTask, error: Exception) -> ExpertTaskFailure:
@@ -684,6 +707,7 @@ def _task_failure(task: ExpertTask, error: Exception) -> ExpertTaskFailure:
 @dataclass(slots=True)
 class _BatchedTask:
     task_id: str
+    phase: str
     candidate: Candidate
     expert: ExpertFamily
     context: Any
@@ -722,6 +746,8 @@ class BatchedExpertRunner:
         self,
         candidates: list[Candidate],
         routes: list[RouteDecision],
+        *,
+        phase: str = "legacy",
     ) -> ExpertRunOutput:
         routes_by_id = {route.candidate_id: route for route in routes}
         desired: dict[str, list[ExpertFamily]] = {}
@@ -740,7 +766,8 @@ class BatchedExpertRunner:
         )
         tasks = [
             _BatchedTask(
-                task_id=f"T{index:05d}",
+                task_id=_phase_task_id(phase, index),
+                phase=phase,
                 candidate=candidate,
                 expert=expert,
                 context=self.context_builder.build(candidate, expert),
@@ -773,6 +800,7 @@ class BatchedExpertRunner:
                         "batch_count": len(batches),
                         "task_count": len(task_lookup),
                         "candidate_count": len(packets),
+                        "phase": phase,
                     },
                 )
             except RuntimeError as error:
@@ -824,7 +852,14 @@ class BatchedExpertRunner:
         *,
         phase: str,
     ) -> ExpertRunOutput:
-        return self.run(candidates, _routes_for_experts(experts_by_candidate))
+        selected_candidates = [
+            candidate for candidate in candidates if candidate.candidate_id in experts_by_candidate
+        ]
+        return self.run(
+            selected_candidates,
+            _routes_for_experts(experts_by_candidate),
+            phase=phase,
+        )
 
     def _ordered_assignments(
         self,

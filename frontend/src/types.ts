@@ -171,7 +171,10 @@ export type AnalysisPayload = {
     expert_task_count?: number
     initial_expert_task_count?: number
     escalation_expert_task_count?: number
+    escalation_requested_count?: number
     full5_candidate_count?: number
+    full5_completed_count?: number
+    full5_completed_rate?: number
     full5_rate?: number
     average_experts_per_candidate?: number
     max_concurrent_expert_requests?: number

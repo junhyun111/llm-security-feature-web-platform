@@ -29,6 +29,7 @@ class PipelineRecallTrace:
     stages: list[RecallStageTrace] = field(default_factory=list)
     top_k_candidate_recall: dict[int, float] = field(default_factory=dict)
     validator_verdict_truth_ids: dict[str, list[str]] = field(default_factory=dict)
+    escalation_metrics: dict[str, float] = field(default_factory=dict)
 
 
 class RecallTracer:
@@ -44,7 +45,7 @@ class RecallTracer:
         if not ground_truth:
             raise ValueError("Recall tracing requires ground truth")
         truths = list(ground_truth)
-        selected_by_id = {
+        candidates_by_id = {
             candidate.candidate_id: candidate for candidate in selection.selected
         }
         routes_by_id = {route.candidate_id: route for route in result.routes}
@@ -68,12 +69,28 @@ class RecallTracer:
                 for candidate in selection.selected
             )
         }
-        expert_ids = {
+        top2_expert_ids = {
             truth.truth_id
             for truth in truths
             if any(
-                _finding_matches_truth(finding, truth)
-                for finding in result.findings
+                _assessment_matches_truth(assessment, candidates_by_id, truth)
+                and assessment.expert in (
+                    (
+                        routes_by_id[assessment.candidate_id].top2_experts
+                        or routes_by_id[assessment.candidate_id].selected[:2]
+                    )
+                    if assessment.candidate_id in routes_by_id
+                    else []
+                )
+                for assessment in result.expert_assessments
+            )
+        }
+        post_escalation_ids = {
+            truth.truth_id
+            for truth in truths
+            if any(
+                _assessment_matches_truth(assessment, candidates_by_id, truth)
+                for assessment in result.expert_assessments
             )
         }
         decision_ids = {
@@ -107,10 +124,11 @@ class RecallTracer:
                 _stage("static_candidate", truths, generated_ids),
                 _stage("candidate_threshold", truths, threshold_ids),
                 _stage("candidate_top_k", truths, selected_ids),
-                _stage("router", truths, router_ids),
-                _stage("expert_assessment", truths, expert_ids),
+                _stage("router_top2", truths, router_ids),
+                _stage("top2_expert_positive", truths, top2_expert_ids),
+                _stage("post_escalation_expert_positive", truths, post_escalation_ids),
                 _stage("evidence_gate", truths, decision_ids),
-                _stage("finding", truths, validated_ids),
+                _stage("final_finding", truths, validated_ids),
             ],
             top_k_candidate_recall={
                 k: len(
@@ -122,6 +140,19 @@ class RecallTracer:
                 for k in range(1, len(selection.threshold_candidates) + 1)
             },
             validator_verdict_truth_ids=verdict_ids,
+            escalation_metrics={
+                "top2_recall": len(top2_expert_ids) / len(truths),
+                "after_escalation_recall": len(post_escalation_ids) / len(truths),
+                "recall_recovery": (len(post_escalation_ids) - len(top2_expert_ids)) / len(truths),
+                "full5_rate": (
+                    result.escalation_requested_count / len(result.candidates)
+                    if result.candidates else 0.0
+                ),
+                "average_experts_per_candidate": (
+                    result.expert_task_count / len(result.candidates)
+                    if result.candidates else 0.0
+                ),
+            },
         )
 
 
@@ -194,6 +225,17 @@ def _finding_matches_truth(finding: Finding, truth: GroundTruth) -> bool:
             or finding.function == truth.function
         )
         and _cwes_match(finding.cwes, truth.cwes)
+    )
+
+
+def _assessment_matches_truth(assessment, candidates: dict[str, Candidate], truth: GroundTruth) -> bool:
+    candidate = candidates.get(assessment.candidate_id)
+    return bool(
+        assessment.verdict.value == "vulnerable"
+        and candidate is not None
+        and _candidate_matches_truth(candidate, truth)
+        and _cwes_match(assessment.cwes, truth.cwes)
+        and (not truth.experts or assessment.expert in truth.experts)
     )
 
 
