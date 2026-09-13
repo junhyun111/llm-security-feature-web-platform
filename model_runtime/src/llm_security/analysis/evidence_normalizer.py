@@ -47,4 +47,39 @@ class SemanticEvidenceNormalizer:
                     facts=facts,
                 )
             )
-        return sorted(evidence, key=lambda item: (item.line, item.kind, item.evidence_id))
+
+        function = structural.function
+        for access in function.memory_accesses:
+            digest = hashlib.sha1(
+                (
+                    f"{access.access_id}:{function.file}:"
+                    f"{access.span.line_start}:{access.text}"
+                ).encode("utf-8")
+            ).hexdigest()[:16]
+            evidence.append(
+                Evidence(
+                    evidence_id=f"EV-{digest}",
+                    kind="memory_access",
+                    file=function.file,
+                    line=access.span.line_start,
+                    expression=access.text,
+                    function=function.name,
+                    subject=access.base,
+                    object=access.index,
+                    facts={
+                        "access_id": access.access_id,
+                        "access_kind": access.kind,
+                        "base": access.base,
+                        "index": access.index,
+                        "base_symbols": sorted(access.base_symbols),
+                        "index_symbols": sorted(access.index_symbols),
+                        "confidence": 1.0,
+                    },
+                )
+            )
+
+        unique = {item.evidence_id: item for item in evidence}
+        return sorted(
+            unique.values(),
+            key=lambda item: (item.line, item.kind, item.evidence_id),
+        )

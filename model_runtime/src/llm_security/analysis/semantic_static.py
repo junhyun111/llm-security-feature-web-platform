@@ -33,9 +33,7 @@ class SemanticStaticAnalyzer:
             )
         )
         self.semantic_analyzer = semantic_analyzer or SemanticAnalyzer(selected_catalog)
-        self.candidate_builder = candidate_builder or SemanticCandidateBuilder(
-            catalog=selected_catalog
-        )
+        self.candidate_builder = candidate_builder or SemanticCandidateBuilder()
 
     def analyze(self, case: ProjectCase) -> list[Candidate]:
         structural = self.structural_analyzer.analyze(case.source_files)

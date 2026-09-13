@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..cwe import cwe_category, normalize_cwe
 from ..models import (
     Candidate,
     EvidenceBundle,
@@ -240,4 +241,27 @@ def _assessment_matches_truth(assessment, candidates: dict[str, Candidate], trut
 
 
 def _cwes_match(actual: list[str], expected: list[str]) -> bool:
-    return not expected or bool(set(actual) & set(expected))
+    if not expected:
+        return True
+
+    actual_normalized = {normalize_cwe(value) for value in actual}
+    actual_normalized.discard("")
+    expected_normalized = {normalize_cwe(value) for value in expected}
+    expected_normalized.discard("")
+
+    if actual_normalized & expected_normalized:
+        return True
+
+    actual_categories = {
+        category
+        for value in actual_normalized
+        for category in [cwe_category(value)]
+        if category is not None
+    }
+    expected_categories = {
+        category
+        for value in expected_normalized
+        for category in [cwe_category(value)]
+        if category is not None
+    }
+    return bool(actual_categories & expected_categories)
