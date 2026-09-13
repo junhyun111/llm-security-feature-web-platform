@@ -2,13 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .aggregation import EvidenceAggregator
-from .decision import (
-    CandidateDecisionArtifact,
-    CandidateDecisionModel,
-    DecisionPolicy,
-)
-from .decision.verifier import EvidenceVerifier
+from .acceptance import EvidenceGate
 from .analysis import LearnedCandidateRanker, SemanticStaticAnalyzer
 from .config import AppConfig
 from .evidence import ContextBuilder
@@ -18,13 +12,11 @@ from .experts import (
     ExpertRunner,
     ParallelExpertRunner,
 )
-from .evidence_processing import EvidenceProcessor
 from .llm import OpenRouterClient
 from .knowledge import LocalSecurityKnowledgeRetriever
 from .pipeline import VulnerabilityPipeline
 from .routing import BudgetedUtilityRouter, Router
 from .selection import CandidateSelector
-from .validation import EvidenceValidator
 
 
 def build_openrouter_client(config: AppConfig) -> OpenRouterClient:
@@ -59,36 +51,6 @@ def build_context_builder(config: AppConfig) -> ContextBuilder:
     return ContextBuilder(
         config.analysis.max_context_characters,
         knowledge_retriever=knowledge_retriever,
-    )
-
-
-def build_decision_components(
-    config: AppConfig,
-) -> tuple[CandidateDecisionModel, DecisionPolicy]:
-    if not config.validation.decision_model_path:
-        raise RuntimeError("Trained candidate decision model required.")
-    try:
-        artifact = CandidateDecisionArtifact.load(
-            config.validation.decision_model_path
-        )
-    except (OSError, ValueError) as exc:
-        raise ValueError(
-            "Cannot load configured candidate decision artifact: "
-            + config.validation.decision_model_path
-        ) from exc
-    config.validation.candidate_probability_threshold = (
-        artifact.candidate_threshold
-    )
-    config.validation.finding_validation_threshold = (
-        artifact.validation_threshold
-    )
-    return CandidateDecisionModel(
-        artifact.model,
-        artifact.calibrator,
-        candidate_threshold=artifact.candidate_threshold,
-        validation_threshold=artifact.validation_threshold,
-    ), DecisionPolicy(
-        validation_threshold=artifact.validation_threshold,
     )
 
 
@@ -141,23 +103,9 @@ def build_pipeline(
     client = build_openrouter_client(config)
     if collect_decision_features:
         config.configure_decision_feature_collection()
-        scorer = None
-        decision_policy = DecisionPolicy(
-            validation_threshold=config.validation.finding_validation_threshold,
-        )
-    else:
-        scorer, decision_policy = build_decision_components(config)
     analyzer = build_candidate_analyzer(config)
     selector = build_candidate_selector(
         config, require_ranker=isinstance(router, BudgetedUtilityRouter)
-    )
-    validator = EvidenceValidator(
-        minimum_confidence=config.validation.minimum_confidence,
-        minimum_confidence_by_expert=config.validation.minimum_confidence_by_expert,
-        client=client,
-        model=config.model.validator_model,
-        strong_model=config.model.strong_model,
-        use_llm_for_uncertain=config.validation.use_llm_for_uncertain,
     )
     return VulnerabilityPipeline(
         analyzer=analyzer,
@@ -169,18 +117,7 @@ def build_pipeline(
             context_builder=build_context_builder(config),
             models_by_family=config.model.expert_models,
         ),
-        evidence_processor=EvidenceProcessor(aggregator=EvidenceAggregator()),
-        decision_model=scorer,
-        verifier=(
-            None
-            if collect_decision_features
-            else EvidenceVerifier(
-                candidate_threshold=scorer.candidate_threshold,
-                policy=decision_policy,
-                validator=validator,
-            )
-        ),
-        collection_only=collect_decision_features,
+        evidence_gate=EvidenceGate(),
     )
 
 
@@ -194,7 +131,6 @@ def build_batched_web_pipeline(
     """Build the web pipeline with bounded LLM batches for logical Experts."""
 
     client = build_openrouter_client(config)
-    scorer, decision_policy = build_decision_components(config)
     if isinstance(router, BudgetedUtilityRouter):
         trained_models = {
             assignment.model_id for assignment in router.assignments.values()
@@ -210,14 +146,6 @@ def build_batched_web_pipeline(
     selector = build_candidate_selector(
         config, require_ranker=isinstance(router, BudgetedUtilityRouter)
     )
-    validator = EvidenceValidator(
-        minimum_confidence=config.validation.minimum_confidence,
-        minimum_confidence_by_expert=config.validation.minimum_confidence_by_expert,
-        client=client,
-        model=config.model.validator_model,
-        strong_model=None,
-        use_llm_for_uncertain=True,
-    )
     return VulnerabilityPipeline(
         analyzer=analyzer,
         selector=selector,
@@ -229,13 +157,7 @@ def build_batched_web_pipeline(
             max_batch_characters=max_batch_characters,
             max_tasks=max_batch_tasks,
         ),
-        evidence_processor=EvidenceProcessor(aggregator=EvidenceAggregator()),
-        decision_model=scorer,
-        verifier=EvidenceVerifier(
-            candidate_threshold=scorer.candidate_threshold,
-            policy=decision_policy,
-            validator=validator,
-        ),
+        evidence_gate=EvidenceGate(),
     )
 
 
@@ -253,7 +175,6 @@ def build_parallel_web_pipeline(
     config.model.json_repair = True
     config.model.structured_output_fallback = True
     client = build_openrouter_client(config)
-    scorer, decision_policy = build_decision_components(config)
     if isinstance(router, BudgetedUtilityRouter):
         trained_models = {
             assignment.model_id for assignment in router.assignments.values()
@@ -267,14 +188,6 @@ def build_parallel_web_pipeline(
     analyzer = build_candidate_analyzer(config)
     selector = build_candidate_selector(
         config, require_ranker=isinstance(router, BudgetedUtilityRouter)
-    )
-    validator = EvidenceValidator(
-        minimum_confidence=config.validation.minimum_confidence,
-        minimum_confidence_by_expert=config.validation.minimum_confidence_by_expert,
-        client=client,
-        model=config.model.validator_model,
-        strong_model=None,
-        use_llm_for_uncertain=True,
     )
     return VulnerabilityPipeline(
         analyzer=analyzer,
@@ -290,11 +203,5 @@ def build_parallel_web_pipeline(
             progress_callback=progress_callback,
             cancel_callback=cancel_callback,
         ),
-        evidence_processor=EvidenceProcessor(aggregator=EvidenceAggregator()),
-        decision_model=scorer,
-        verifier=EvidenceVerifier(
-            candidate_threshold=scorer.candidate_threshold,
-            policy=decision_policy,
-            validator=validator,
-        ),
+        evidence_gate=EvidenceGate(),
     )

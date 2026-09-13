@@ -11,7 +11,7 @@ from llm_security_runtime.paths import RuntimePaths, configure_process_environme
 
 
 class RuntimePathsTests(unittest.TestCase):
-    def test_packaged_decision_artifact_is_configured_without_env_file(self) -> None:
+    def test_decision_artifact_is_not_configured_without_env_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with patch.dict(
@@ -25,9 +25,8 @@ class RuntimePathsTests(unittest.TestCase):
                 configure_process_environment(paths)
                 config = AppConfig.from_env(paths.env_file)
 
-                expected = str((root / "artifacts" / "decision_layer.pt").resolve())
-                self.assertEqual(expected, os.environ["DECISION_MODEL_PATH"])
-                self.assertEqual(expected, config.validation.decision_model_path)
+                self.assertEqual("stale/path.pt", os.environ["DECISION_MODEL_PATH"])
+                self.assertNotIn("artifacts\\decision_layer.pt", config.validation.decision_model_path or "")
 
 
 if __name__ == "__main__":

@@ -48,6 +48,14 @@ class ValidationVerdict(str, Enum):
     REJECTED = "rejected"
 
 
+class ExpertVerdict(str, Enum):
+    """The domain Expert's conclusion for one routed candidate."""
+
+    VULNERABLE = "vulnerable"
+    SAFE = "safe"
+    UNCERTAIN = "uncertain"
+
+
 @dataclass(slots=True)
 class Evidence:
     evidence_id: str
@@ -224,6 +232,29 @@ class ExpertEvidence:
 
 
 @dataclass(slots=True)
+class ExpertAssessment:
+    """One Expert's final, evidence-attributed assessment of a candidate."""
+
+    candidate_id: str
+    expert: ExpertFamily
+    verdict: ExpertVerdict
+    cwes: list[str]
+    evidence_ids: list[str]
+    counter_evidence_ids: list[str]
+    source: str | None
+    sink: str | None
+    missing_guard: str | None
+    trigger_path: list[str]
+    preconditions: list[str]
+    title: str
+    root_cause: str
+    consequence: str
+    confidence: float | None = None
+    model_id: str | None = None
+    prompt_version: str | None = None
+
+
+@dataclass(slots=True)
 class EvidenceBundle:
     """Evidence fused across Experts but not yet classified."""
 
@@ -286,7 +317,7 @@ class Finding:
     missing_guard: str | None
     trigger_path: list[str]
     evidence_ids: list[str]
-    confidence: float
+    confidence: float | None
     # Experts collect evidence for a hypothesis.  This is deliberately not a
     # final vulnerability verdict; aggregation and validation make that call.
     position: str = "support"
@@ -355,6 +386,7 @@ class PipelineResult:
     expert_failures: list[Any] = field(default_factory=list)
     analysis_status: str = "completed"
     evidence_bundles: list[EvidenceBundle] = field(default_factory=list)
+    expert_assessments: list[ExpertAssessment] = field(default_factory=list)
     candidate_decision_output: Any | None = None
     candidate_decision_input: Any | None = None
 

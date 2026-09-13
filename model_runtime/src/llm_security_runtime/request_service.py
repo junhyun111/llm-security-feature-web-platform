@@ -223,12 +223,6 @@ class RequestAwareWebJobService(WebJobService):
                     if config.analysis.candidate_ranker_path
                     else None
                 ),
-                "decision_model_artifact": config.validation.decision_model_path,
-                "decision_model_artifact_sha256": (
-                    _file_sha256(config.validation.decision_model_path)
-                    if config.validation.decision_model_path
-                    else None
-                ),
                 "max_candidates": config.analysis.max_candidates_per_project,
                 "source_file_count": len(source_files),
                 "generated_candidate_count": result.generated_candidate_count,
@@ -287,12 +281,6 @@ class RequestAwareWebJobService(WebJobService):
                     "candidate_selection_threshold": (
                         config.candidate_selection.threshold
                     ),
-                    "candidate_decision_threshold": (
-                        config.validation.candidate_probability_threshold
-                    ),
-                    "finding_validation_threshold": (
-                        config.validation.finding_validation_threshold
-                    ),
                 },
             },
             "candidate_decision_output": (
@@ -300,6 +288,9 @@ class RequestAwareWebJobService(WebJobService):
                 if result.candidate_decision_output is not None
                 else None
             ),
+            "expert_assessments": [
+                to_dict(item) for item in result.expert_assessments
+            ],
             "findings": bundles,
             "routes": [to_dict(item) for item in result.routes],
             "candidate_selection": [

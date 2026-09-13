@@ -48,7 +48,7 @@ class ExactResultClient:
         results = [
             {
                 "task_id": task["task_id"],
-                "findings": [],
+                "assessment": assessment_payload(),
             }
             for packet in packets
             for task in packet["expert_tasks"]
@@ -110,6 +110,24 @@ def candidate(index: int) -> Candidate:
     )
 
 
+def assessment_payload() -> dict:
+    return {
+        "verdict": "safe",
+        "cwes": [],
+        "evidence_ids": [],
+        "counter_evidence_ids": [],
+        "source": None,
+        "sink": None,
+        "missing_guard": None,
+        "trigger_path": [],
+        "preconditions": [],
+        "title": "Safe candidate",
+        "root_cause": "No vulnerability found.",
+        "consequence": "None.",
+        "confidence": None,
+    }
+
+
 def route(item: Candidate) -> RouteDecision:
     experts = list(ACTIVE_UTILITY_EXPERTS)
     return RouteDecision(
@@ -141,7 +159,7 @@ class BatchedExpertProtocolTest(unittest.TestCase):
         self.assertEqual(2, results["maxItems"])
         self.assertEqual(["T00001", "T00002"], task_id["enum"])
         self.assertEqual(
-            {"task_id", "findings"},
+            {"task_id", "assessment"},
             set(results["items"]["properties"]),
         )
 

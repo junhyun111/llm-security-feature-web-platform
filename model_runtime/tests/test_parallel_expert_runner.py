@@ -69,7 +69,7 @@ class ConcurrentClient:
             if task_id in self.failed_task_ids:
                 raise RuntimeError("simulated provider failure")
             return LLMResponse(
-                data={"findings": []},
+                data={"assessment": assessment_payload()},
                 usage=UsageRecord(model=kwargs["model"]),
                 raw={},
             )
@@ -90,7 +90,7 @@ class RecoveryClient:
         if task_id == "T00001" and self.calls[task_id] == 1:
             raise RuntimeError("OpenRouter HTTP 429: rate limited (provider=Wafer)")
         return LLMResponse(
-            data={"findings": []},
+            data={"assessment": assessment_payload()},
             usage=UsageRecord(model=kwargs["model"]),
             raw={},
         )
@@ -108,7 +108,7 @@ class PartialCancellationClient:
         else:
             self.release.wait(timeout=2)
         return LLMResponse(
-            data={"findings": []},
+            data={"assessment": assessment_payload()},
             usage=UsageRecord(model=kwargs["model"]),
             raw={},
         )
@@ -127,6 +127,24 @@ def candidate(index: int) -> Candidate:
         features={},
         suspicion_score=1.0 - index / 100,
     )
+
+
+def assessment_payload() -> dict:
+    return {
+        "verdict": "safe",
+        "cwes": [],
+        "evidence_ids": [],
+        "counter_evidence_ids": [],
+        "source": None,
+        "sink": None,
+        "missing_guard": None,
+        "trigger_path": [],
+        "preconditions": [],
+        "title": "Safe candidate",
+        "root_cause": "No vulnerability found.",
+        "consequence": "None.",
+        "confidence": None,
+    }
 
 
 def route(item: Candidate) -> RouteDecision:
@@ -209,7 +227,7 @@ class ParallelExpertRunnerTest(unittest.TestCase):
         self.assertLessEqual(client.max_active, 3)
         self.assertEqual(6, len(client.calls))
         self.assertTrue(all(
-            "findings" in call["schema"]["schema"]["properties"]
+            "assessment" in call["schema"]["schema"]["properties"]
             for call in client.calls
         ))
         self.assertTrue(all(

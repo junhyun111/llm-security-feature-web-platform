@@ -1,5 +1,5 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "router": {
     "file": "router.pkl",
     "replaceable": true,
@@ -11,11 +11,5 @@
     "feature_schema": "semantic-cwe-v3",
     "sha256": "e77e98da69137e5a87118430f59b2be6fcca408614ac0a81156eab1078ee9a98"
   },
-  "decision_model": {
-    "file": "decision_layer.pt",
-    "schema": "direct-asymmetric-mil-v1",
-    "replaceable": true,
-    "validation_command": "run inspect"
-  },
-  "note": "inspect calculates metadata and SHA-256 from the active router.pkl"
+  "note": "Production uses the router and candidate ranker while the EvidenceGate is deterministic."
 }

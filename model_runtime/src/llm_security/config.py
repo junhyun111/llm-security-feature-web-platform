@@ -259,15 +259,6 @@ class AppConfig:
             )
         if not 0.0 <= self.validation.minimum_confidence <= 1.0:
             raise ValueError("MINIMUM_CONFIDENCE must be between 0 and 1")
-        if not (
-            0.0
-            <= self.validation.candidate_probability_threshold
-            <= self.validation.finding_validation_threshold
-            <= 1.0
-        ):
-            raise ValueError(
-                "Decision thresholds must satisfy 0 <= low <= high <= 1"
-            )
         if self.runtime.request_timeout_seconds <= 0:
             raise ValueError("REQUEST_TIMEOUT_SECONDS must be positive")
         if self.runtime.max_retries < 0:
@@ -286,7 +277,6 @@ class AppConfig:
             )
         for model_id in (
             self.model.expert_model,
-            self.model.validator_model,
             self.model.patch_model,
             *self.model.expert_models.values(),
         ):

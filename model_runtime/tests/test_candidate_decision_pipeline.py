@@ -7,8 +7,6 @@ from types import SimpleNamespace
 
 import torch
 
-from llm_security.aggregation import EvidenceAggregator
-from llm_security.cwe import causal_cwe_family
 from llm_security.decision import (
     CandidateDecisionArtifact,
     CandidateDecisionOutput,
@@ -27,14 +25,13 @@ from llm_security.decision import (
 )
 from llm_security.decision.mil.losses import asymmetric_mil_loss
 from llm_security.decision.mil.model import CandidateForwardOutput
-from llm_security.decision.verifier import EvidenceVerifier
 from llm_security.evaluation import RecallTracer
-from llm_security.evidence_processing import EvidenceProcessor
 from llm_security.models import (
     Candidate,
     Evidence,
-    ExpertEvidence,
+    ExpertAssessment,
     ExpertFamily,
+    ExpertVerdict,
     GroundTruth,
     ProjectCase,
     RouteDecision,
@@ -42,7 +39,6 @@ from llm_security.models import (
 )
 from llm_security.pipeline import VulnerabilityPipeline
 from llm_security.selection import CandidateSelector
-from llm_security.validation import EvidenceValidator
 
 
 def candidate(
@@ -84,19 +80,23 @@ def route(identifier: str) -> RouteDecision:
     )
 
 
-def observation(identifier: str, cwe: str, expert: ExpertFamily) -> ExpertEvidence:
-    return ExpertEvidence(
-        identifier,
-        expert,
-        "support",
-        causal_cwe_family(cwe),
-        [cwe],
-        [f"E-{identifier}"],
-        "value",
-        "sink",
-        ["value", "sink"],
-        [],
-        0.8,
+def assessment(identifier: str, cwe: str, expert: ExpertFamily) -> ExpertAssessment:
+    return ExpertAssessment(
+        candidate_id=identifier,
+        expert=expert,
+        verdict=ExpertVerdict.VULNERABLE,
+        cwes=[cwe],
+        evidence_ids=[f"E-{identifier}"],
+        counter_evidence_ids=[],
+        source="value",
+        sink="sink",
+        missing_guard="missing bound",
+        trigger_path=["value", "sink"],
+        preconditions=[],
+        title="Issue",
+        root_cause="Unchecked value",
+        consequence="Memory corruption",
+        confidence=0.8,
     )
 
 
@@ -302,10 +302,10 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
         second = candidate("C2", file="parse.c", function="parse", line=12)
         below = candidate("C3", file="safe.c", function="safe", score=0.1)
         expert_output = SimpleNamespace(
-            evidence=[
-                observation("C1", "CWE-787", ExpertFamily.MEMORY_SAFETY),
-                observation("C1", "CWE-190", ExpertFamily.INTEGER_SIZE_TYPE),
-                observation("C2", "CWE-190", ExpertFamily.INTEGER_SIZE_TYPE),
+            assessments=[
+                assessment("C1", "CWE-787", ExpertFamily.MEMORY_SAFETY),
+                assessment("C1", "CWE-190", ExpertFamily.INTEGER_SIZE_TYPE),
+                assessment("C2", "CWE-190", ExpertFamily.INTEGER_SIZE_TYPE),
             ],
             usage=[],
             errors=[],
@@ -321,13 +321,6 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
             selector=CandidateSelector(threshold_enabled=False),
             router=SimpleNamespace(route=lambda item: route(item.candidate_id)),
             expert_runner=SimpleNamespace(run=lambda _c, _r: expert_output),
-            evidence_processor=EvidenceProcessor(),
-            decision_model=FixedDecisionModel({"C1": 0.91, "C2": 0.84, "C3": 0.27}),
-            verifier=EvidenceVerifier(
-                candidate_threshold=0.28,
-                policy=DecisionPolicy(validation_threshold=0.71),
-                validator=EvidenceValidator(use_llm_for_uncertain=False),
-            ),
         )
 
         result = pipeline.run(ProjectCase("S1", "project", {}))
@@ -348,7 +341,7 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
     def test_recall_trace_is_an_offline_evaluator(self) -> None:
         found = candidate("C1")
         expert_output = SimpleNamespace(
-            evidence=[observation("C1", "CWE-787", ExpertFamily.MEMORY_SAFETY)],
+            assessments=[assessment("C1", "CWE-787", ExpertFamily.MEMORY_SAFETY)],
             usage=[], errors=[], task_count=1, submitted_task_count=1,
             completed_task_count=1, failed_task_count=0, skipped_task_count=0,
             failures=[],
@@ -360,13 +353,6 @@ class CandidateDecisionPipelineTests(unittest.TestCase):
             selector=selector,
             router=SimpleNamespace(route=lambda item: route(item.candidate_id)),
             expert_runner=SimpleNamespace(run=lambda _c, _r: expert_output),
-            evidence_processor=EvidenceProcessor(),
-            decision_model=FixedDecisionModel({"C1": 0.9}),
-            verifier=EvidenceVerifier(
-                candidate_threshold=0.28,
-                policy=DecisionPolicy(validation_threshold=0.71),
-                validator=EvidenceValidator(use_llm_for_uncertain=False),
-            ),
         )
         result = pipeline.run(ProjectCase("S1", "project", {}))
         truths = [

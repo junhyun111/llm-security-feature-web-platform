@@ -72,8 +72,8 @@ class RecallTracer:
             truth.truth_id
             for truth in truths
             if any(
-                _bundle_matches_truth(bundle, selected_by_id, truth)
-                for bundle in result.evidence_bundles
+                _finding_matches_truth(finding, truth)
+                for finding in result.findings
             )
         }
         decision_ids = {
@@ -108,9 +108,9 @@ class RecallTracer:
                 _stage("candidate_threshold", truths, threshold_ids),
                 _stage("candidate_top_k", truths, selected_ids),
                 _stage("router", truths, router_ids),
-                _stage("expert_evidence", truths, expert_ids),
-                _stage("candidate_decision", truths, decision_ids),
-                _stage("verifier_validated", truths, validated_ids),
+                _stage("expert_assessment", truths, expert_ids),
+                _stage("evidence_gate", truths, decision_ids),
+                _stage("finding", truths, validated_ids),
             ],
             top_k_candidate_recall={
                 k: len(

@@ -11,6 +11,7 @@ from .llm import LLMClient
 from .models import (
     Candidate,
     ExpertAssignment,
+    ExpertAssessment,
     ExpertEvidence,
     ExpertFamily,
     RouteDecision,
@@ -19,9 +20,9 @@ from .models import (
 from .prompts import (
     batched_expert_messages,
     batched_findings_schema,
+    expert_assessment_from_payload,
+    expert_assessment_schema,
     expert_messages,
-    expert_evidence_from_payload,
-    expert_evidence_schema,
 )
 
 
@@ -73,6 +74,8 @@ class ExpertRunOutput:
     covered_candidate_count: int = 0
     cancelled: bool = False
     failures: list[ExpertTaskFailure] = field(default_factory=list)
+    assessments: list[ExpertAssessment] = field(default_factory=list)
+    # Kept temporarily for serialized/UI compatibility during the migration.
     evidence: list[ExpertEvidence] = field(default_factory=list)
 
 
@@ -97,7 +100,7 @@ class ExpertRunner:
         routes: list[RouteDecision],
     ) -> ExpertRunOutput:
         by_id = {candidate.candidate_id: candidate for candidate in candidates}
-        evidence: list[ExpertEvidence] = []
+        assessments: list[ExpertAssessment] = []
         usage: list[UsageRecord] = []
         errors: list[str] = []
         task_count = 0
@@ -120,7 +123,7 @@ class ExpertRunner:
                     response = self.client.complete(
                         model=assignment.model_id,
                         messages=expert_messages(candidate, context),
-                        response_schema=expert_evidence_schema(),
+                        response_schema=expert_assessment_schema(),
                         metadata={
                             "task": "expert",
                             "candidate": candidate,
@@ -129,19 +132,15 @@ class ExpertRunner:
                         },
                     )
                     usage.append(response.usage)
-                    payloads = response.data.get("findings", [])
-                    if not isinstance(payloads, list):
-                        raise TypeError("The model response 'findings' field must be a list")
-                    for payload in payloads:
-                        evidence.append(
-                            expert_evidence_from_payload(
-                                payload,
-                                candidate=candidate,
-                                expert=expert,
-                                model_id=assignment.model_id,
-                                prompt_version=self.prompt_version,
-                            )
+                    assessments.append(
+                        expert_assessment_from_payload(
+                            response.data.get("assessment"),
+                            candidate=candidate,
+                            expert=expert,
+                            model_id=assignment.model_id,
+                            prompt_version=self.prompt_version,
                         )
+                    )
                     completed_task_count += 1
                 except (KeyError, TypeError, ValueError, RuntimeError) as error:
                     errors.append(
@@ -149,7 +148,7 @@ class ExpertRunner:
                         f"{assignment.model_id}: {error}"
                     )
         return ExpertRunOutput(
-            evidence=evidence,
+            assessments=assessments,
             usage=usage,
             errors=errors,
             task_count=task_count,
@@ -169,7 +168,7 @@ class ExpertTask:
 class ExpertTaskResult:
     task_id: str
     candidate_id: str
-    findings: list[ExpertEvidence]
+    assessment: ExpertAssessment
     usage: UsageRecord
 
 
@@ -415,14 +414,14 @@ class ParallelExpertRunner:
                 if cancelled:
                     break
 
-        findings: list[ExpertEvidence] = []
+        assessments: list[ExpertAssessment] = []
         usage: list[UsageRecord] = []
         ordered_errors: list[str] = []
         candidate_ids = {task.candidate.candidate_id for task in tasks}
         for task in tasks:
             result = results.get(task.task_id)
             if result is not None:
-                findings.extend(result.findings)
+                assessments.append(result.assessment)
                 usage.append(result.usage)
             elif (
                 task.task_id in failures
@@ -450,7 +449,7 @@ class ParallelExpertRunner:
         )
 
         return ExpertRunOutput(
-            evidence=findings,
+            assessments=assessments,
             usage=usage,
             errors=ordered_errors,
             task_count=total,
@@ -539,7 +538,7 @@ class ParallelExpertRunner:
         response = self.client.complete(
             model=assignment.model_id,
             messages=expert_messages(candidate, context),
-            response_schema=expert_evidence_schema(),
+            response_schema=expert_assessment_schema(),
             metadata={
                 "task": "expert",
                 "task_id": task.task_id,
@@ -548,23 +547,17 @@ class ParallelExpertRunner:
                 "exclude_provider": excluded_provider,
             },
         )
-        payloads = response.data.get("findings", [])
-        if not isinstance(payloads, list):
-            raise TypeError("The model response 'findings' field must be a list")
-        findings = [
-            expert_evidence_from_payload(
-                payload,
-                candidate=candidate,
-                expert=expert,
-                model_id=response.usage.model,
-                prompt_version=assignment.prompt_version,
-            )
-            for payload in payloads
-        ]
+        assessment = expert_assessment_from_payload(
+            response.data.get("assessment"),
+            candidate=candidate,
+            expert=expert,
+            model_id=response.usage.model,
+            prompt_version=assignment.prompt_version,
+        )
         return ExpertTaskResult(
             task_id=task.task_id,
             candidate_id=candidate.candidate_id,
-            findings=findings,
+            assessment=assessment,
             usage=response.usage,
         )
 
@@ -720,7 +713,7 @@ class BatchedExpertRunner:
         ]
         batches, oversized = self._partition_batches(tasks)
 
-        findings: list[ExpertEvidence] = []
+        assessments: list[ExpertAssessment] = []
         usage: list[UsageRecord] = []
         errors: list[str] = []
         completed_task_count = 0
@@ -751,14 +744,14 @@ class BatchedExpertRunner:
                 # one provider failure erase later independent Expert tasks.
                 failed_task_count += len(batch)
                 continue
-            batch_findings, batch_errors, batch_completed = (
+            batch_assessments, batch_errors, batch_completed = (
                 self._parse_batch_response(
                     response.data,
                     task_lookup,
                     model_id=response.usage.model,
                 )
             )
-            findings.extend(batch_findings)
+            assessments.extend(batch_assessments)
             usage.append(response.usage)
             completed_task_count += batch_completed
             failed_task_count += len(batch) - batch_completed
@@ -775,7 +768,7 @@ class BatchedExpertRunner:
             )
 
         return ExpertRunOutput(
-            evidence=findings,
+            assessments=assessments,
             usage=usage,
             errors=errors,
             task_count=len(tasks),
@@ -862,8 +855,8 @@ class BatchedExpertRunner:
         task_lookup: dict[str, tuple[Candidate, ExpertFamily]],
         *,
         model_id: str,
-    ) -> tuple[list[ExpertEvidence], list[str], int]:
-        findings: list[ExpertEvidence] = []
+    ) -> tuple[list[ExpertAssessment], list[str], int]:
+        assessments: list[ExpertAssessment] = []
         errors: list[str] = []
         completed: set[str] = set()
         seen: set[str] = set()
@@ -899,25 +892,18 @@ class BatchedExpertRunner:
 
             candidate, expert = task_lookup[task_id]
             try:
-                task_findings = payload.get("findings", [])
-                if not isinstance(task_findings, list):
-                    raise TypeError(f"Findings for {task_id} must be a list")
-
-                converted = [
-                    expert_evidence_from_payload(
-                        finding_payload,
-                        candidate=candidate,
-                        expert=expert,
-                        model_id=model_id,
-                        prompt_version=self.prompt_version,
-                    )
-                    for finding_payload in task_findings
-                ]
+                assessment = expert_assessment_from_payload(
+                    payload.get("assessment"),
+                    candidate=candidate,
+                    expert=expert,
+                    model_id=model_id,
+                    prompt_version=self.prompt_version,
+                )
             except (KeyError, TypeError, ValueError) as error:
                 errors.append(str(error))
                 continue
 
-            findings.extend(converted)
+            assessments.append(assessment)
             completed.add(task_id)
 
         missing = sorted(set(task_lookup) - completed)
@@ -926,7 +912,7 @@ class BatchedExpertRunner:
                 "Model did not return a valid result for Expert tasks: "
                 + ", ".join(missing)
             )
-        return findings, errors, len(completed)
+        return assessments, errors, len(completed)
 
     def _build_packets(
         self,
