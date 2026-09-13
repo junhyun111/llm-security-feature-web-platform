@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 from .acceptance import EvidenceGate
 from .escalation import EvidenceEscalationPolicy
-from .analysis import LearnedCandidateRanker, SemanticStaticAnalyzer
+from .analysis import SemanticStaticAnalyzer
 from .config import AppConfig
 from .evidence import ContextBuilder
 from .experts import (
@@ -70,28 +70,12 @@ def build_candidate_analyzer(
     )
 
 
-def build_candidate_selector(
-    config: AppConfig, *, require_ranker: bool = False
-) -> CandidateSelector:
-    """Build the one component that owns rank, threshold, and Top-K."""
-
-    ranker = None
-    if config.analysis.candidate_ranker_path:
-        ranker_path = config.analysis.candidate_ranker_path
-        try:
-            ranker = LearnedCandidateRanker.load(ranker_path)
-        except (OSError, ValueError) as exc:
-            raise ValueError(
-                f"Cannot load configured Candidate Ranker artifact: {ranker_path}"
-            ) from exc
-    elif config.analysis.candidate_ranker_required or require_ranker:
-        raise ValueError("A Candidate Ranker artifact is required but not configured")
-
+def build_candidate_selector(config: AppConfig) -> CandidateSelector:
+    """Build the recall-first production selector without learned ranker gating."""
     return CandidateSelector(
-        ranker=ranker,
         threshold=config.candidate_selection.threshold,
-        threshold_enabled=config.candidate_selection.enabled,
-        max_candidates=config.analysis.max_candidates_per_project,
+        threshold_enabled=False,
+        max_candidates=None,
     )
 
 
@@ -105,9 +89,7 @@ def build_pipeline(
     if collect_decision_features:
         config.configure_decision_feature_collection()
     analyzer = build_candidate_analyzer(config)
-    selector = build_candidate_selector(
-        config, require_ranker=isinstance(router, BudgetedUtilityRouter)
-    )
+    selector = build_candidate_selector(config)
     return VulnerabilityPipeline(
         analyzer=analyzer,
         selector=selector,
@@ -145,9 +127,7 @@ def build_batched_web_pipeline(
             # This path is surfaced as unvalidated in the web UI and result JSON.
             router.execution_model_id = None
     analyzer = build_candidate_analyzer(config)
-    selector = build_candidate_selector(
-        config, require_ranker=isinstance(router, BudgetedUtilityRouter)
-    )
+    selector = build_candidate_selector(config)
     return VulnerabilityPipeline(
         analyzer=analyzer,
         selector=selector,
@@ -189,9 +169,7 @@ def build_parallel_web_pipeline(
             # request-selected model executes every independent task.
             router.execution_model_id = None
     analyzer = build_candidate_analyzer(config)
-    selector = build_candidate_selector(
-        config, require_ranker=isinstance(router, BudgetedUtilityRouter)
-    )
+    selector = build_candidate_selector(config)
     return VulnerabilityPipeline(
         analyzer=analyzer,
         selector=selector,

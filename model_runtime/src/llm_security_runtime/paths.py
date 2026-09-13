@@ -16,7 +16,6 @@ class RuntimePaths:
     root: Path
     env_file: Path
     router_artifact: Path
-    candidate_ranker_artifact: Path
     workspace_root: Path
 
     @classmethod
@@ -35,19 +34,13 @@ class RuntimePaths:
             root=root,
             env_file=selected_env.resolve(),
             router_artifact=(root / "artifacts" / "router.pkl").resolve(),
-            candidate_ranker_artifact=(
-                root / "artifacts" / "candidate_ranker.pkl"
-            ).resolve(),
             workspace_root=(root / "work").resolve(),
         )
 
     def require_artifacts(self) -> None:
         missing = [
             path
-            for path in (
-                self.router_artifact,
-                self.candidate_ranker_artifact,
-            )
+            for path in (self.router_artifact,)
             if not path.is_file()
         ]
         if missing:
@@ -71,8 +64,9 @@ def configure_process_environment(paths: RuntimePaths) -> None:
     if paths.env_file.is_file():
         for key, value in _read_env_file(paths.env_file).items():
             os.environ.setdefault(key, value)
-    os.environ["CANDIDATE_RANKER_PATH"] = str(paths.candidate_ranker_artifact)
-    os.environ["CANDIDATE_RANKER_REQUIRED"] = "true"
+    # Candidate ranking remains available for offline ablations only.
+    os.environ.pop("CANDIDATE_RANKER_PATH", None)
+    os.environ["CANDIDATE_RANKER_REQUIRED"] = "false"
     os.environ["WEB_ROUTER_ARTIFACT"] = str(paths.router_artifact)
     os.environ["WEB_WORKSPACE_ROOT"] = str(paths.workspace_root)
 

@@ -29,7 +29,6 @@ export default function NewAnalysisModal({ open, onClose, onCreated }: NewAnalys
   const [files, setFiles] = useState<File[]>([])
   const [projectName, setProjectName] = useState('')
   const [excluded, setExcluded] = useState<ExcludedFiles>(EMPTY_EXCLUDED)
-  const [sensitivity, setSensitivity] = useState(0.5)
   const [modelId, setModelId] = useState(DEFAULT_MODEL)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -94,7 +93,7 @@ export default function NewAnalysisModal({ open, onClose, onCreated }: NewAnalys
     setError('')
     const form = new FormData()
     form.append('project_name', projectName || 'project')
-    form.append('sensitivity', sensitivity.toString())
+    form.append('sensitivity', '1')
     form.append('model', modelId.trim())
     form.append('api_key', apiKey.trim())
     for (const file of files) {
@@ -143,7 +142,7 @@ export default function NewAnalysisModal({ open, onClose, onCreated }: NewAnalys
 
         {step === 2 && <section className="wizard-settings-step">
           <div className="wizard-setting-title"><span className="wizard-feature-icon"><Settings2 size={22} /></span><div><h2>Analysis settings</h2><p>These settings apply only to this analysis.</p></div></div>
-          <div className="wizard-setting-block"><div className="wizard-setting-heading"><div><label htmlFor="wizard-sensitivity">Detection sensitivity</label><p>Higher sensitivity searches for more candidates, which can increase cost and false positives.</p></div><strong>{sensitivity.toFixed(2)}</strong></div><input id="wizard-sensitivity" type="range" min="0" max="1" step="0.05" value={sensitivity} onChange={(event) => setSensitivity(Number(event.target.value))} /><div className="wizard-range-labels"><span>0.0 Low</span><span>{sensitivity < .34 ? 'Low' : sensitivity < .67 ? 'Balanced' : 'High'}</span><span>High 1.0</span></div></div>
+          <div className="wizard-setting-block"><div className="wizard-setting-heading"><div><label>Candidate coverage</label><p>Every static-analysis candidate is sent to the Router and Experts. No score threshold or Top-K candidate cut is applied.</p></div><strong>All</strong></div></div>
           <div className="wizard-setting-block"><label htmlFor="wizard-model">LLM model</label><input id="wizard-model" value={modelId} onChange={(event) => setModelId(event.target.value)} placeholder="provider/model-name" spellCheck={false} /><p>Use the model configured for your OpenRouter account.</p></div>
           <div className={`wizard-key-status ${apiKey ? 'configured' : ''}`}><ShieldCheck size={18} /><div><strong>{apiKey ? 'OpenRouter API key connected' : 'OpenRouter API key required'}</strong><span>{apiKey ? 'Your key is available for this analysis only.' : 'Add your key in Settings to continue.'}</span></div><Link to="/settings">Settings</Link></div>
         </section>}
@@ -152,7 +151,7 @@ export default function NewAnalysisModal({ open, onClose, onCreated }: NewAnalys
           <span className="wizard-feature-icon confirmation"><Check size={28} /></span>
           <h2>Ready to analyze</h2>
           <p>Review the request below, then start the security scan.</p>
-          <div className="wizard-review-card"><div><span>Project</span><strong>{projectName}</strong></div><div><span>Source files</span><strong>{files.length.toLocaleString()} files</strong></div><div><span>Sensitivity</span><strong>{sensitivity.toFixed(2)}</strong></div><div><span>LLM model</span><strong title={modelId}>{modelId}</strong></div></div>
+          <div className="wizard-review-card"><div><span>Project</span><strong>{projectName}</strong></div><div><span>Source files</span><strong>{files.length.toLocaleString()} files</strong></div><div><span>Candidate coverage</span><strong>All static candidates</strong></div><div><span>LLM model</span><strong title={modelId}>{modelId}</strong></div></div>
           <div className="wizard-security-notice"><ShieldCheck size={17} /> Your API key is used only to send this analysis request and is not stored with the results.</div>
         </section>}
         {error && <div className="wizard-error" role="alert">{error}</div>}

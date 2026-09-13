@@ -19,6 +19,12 @@ SemanticStaticAnalyzer
 recall tracing, Router baselines, and calibration APIs live under
 `llm_security.evaluation` and are not part of production inference.
 
+`CandidateSelector` is recall-first in production: every candidate emitted by
+`SemanticStaticAnalyzer` proceeds to the Router. It applies neither a learned
+Candidate Ranker, a score threshold, nor a Top-K project cap. The old
+`candidate_ranker.pkl` and its training code remain available only for offline
+ablation experiments and are not runtime artifacts.
+
 The Router only ranks and selects the initial Top-2. It never predicts whether a
 candidate needs all five Experts. `EvidenceEscalationPolicy` makes that decision
 after real Top-2 responses: missing responses, UNCERTAIN, incomplete VULNERABLE

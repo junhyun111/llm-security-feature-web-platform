@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from llm_security.analysis import LearnedCandidateRanker
 from llm_security.models import ACTIVE_UTILITY_EXPERTS
 from llm_security.routing import BudgetedUtilityRouter
 
@@ -15,13 +14,6 @@ def inspect_artifacts(paths: RuntimePaths) -> dict[str, object]:
 
     paths.require_artifacts()
     router = BudgetedUtilityRouter.load(paths.router_artifact)
-    ranker = LearnedCandidateRanker.load(paths.candidate_ranker_artifact)
-
-    if router.feature_schema_version != ranker.feature_schema_version:
-        raise ValueError(
-            "Router and Candidate Ranker feature schemas differ: "
-            f"{router.feature_schema_version} != {ranker.feature_schema_version}"
-        )
     available = {assignment.expert for assignment in router.assignments.values()}
     missing = set(ACTIVE_UTILITY_EXPERTS) - available
     if missing:
@@ -54,11 +46,11 @@ def inspect_artifacts(paths: RuntimePaths) -> dict[str, object]:
             "available_expert_count": len(ACTIVE_UTILITY_EXPERTS),
             "escalation_policy": "evidence-sufficiency-v1",
         },
-        "candidate_ranker": {
-            "path": str(paths.candidate_ranker_artifact),
-            "sha256": _sha256(paths.candidate_ranker_artifact),
-            "backend": ranker.backend,
-            "feature_schema": ranker.feature_schema_version,
+        "candidate_selection": {
+            "mode": "all_static_candidates",
+            "score_threshold": None,
+            "max_candidates": None,
+            "learned_ranker_required": False,
         },
     }
 

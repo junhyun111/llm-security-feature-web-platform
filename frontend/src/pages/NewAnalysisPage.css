@@ -170,6 +170,12 @@
   font-size: 12px;
 }
 
+/* Candidate coverage is fixed to every static candidate; retain the old DOM
+   class only for backwards-compatible styling while hiding its removed control. */
+.analysis-setting-block:has(.sensitivity-range) {
+  display: none;
+}
+
 .sensitivity-range {
   width: 100%;
   height: 5px;

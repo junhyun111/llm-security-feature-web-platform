@@ -38,6 +38,7 @@ class RuntimeJobOptions:
     def safe_metadata(self) -> dict[str, object]:
         return {
             "sensitivity": self.sensitivity,
+            "candidate_coverage_mode": "all_static_candidates",
             "model_override": self.model,
             "router_model_validated": self.router_validated,
             "api_key_source": "request",
@@ -45,7 +46,7 @@ class RuntimeJobOptions:
 
 
 class RequestAwareWebJobService(WebJobService):
-    """WebJobService with per-job OpenRouter and sensitivity configuration.
+    """WebJobService with per-job OpenRouter configuration.
 
     Secrets are intentionally kept only in process memory. They are never
     serialized into job.json, analysis.json, or the SQLite web database.
@@ -118,17 +119,12 @@ class RequestAwareWebJobService(WebJobService):
             for family in config.model.expert_models
         }
 
-        # Decision and Candidate Gate thresholds are exported from validation
-        # calibration. A per-request UI slider must not silently invalidate the
-        # measured recall/FPR operating point. Sensitivity controls only the
-        # candidate review budget, which preserves its documented cost/coverage
-        # trade-off without changing the learned decision boundary.
-        sensitivity = min(1.0, max(0.0, options.sensitivity))
-        base_candidate_budget = config.analysis.max_candidates_per_project
-        config.analysis.max_candidates_per_project = max(
-            1,
-            round(base_candidate_budget * (0.5 + sensitivity)),
-        )
+        # Recall-first production policy: UI sensitivity is retained for API
+        # compatibility only. It must not discard static candidates.
+        config.candidate_selection.enabled = False
+        config.analysis.max_candidates_per_project = None
+        config.analysis.candidate_ranker_path = None
+        config.analysis.candidate_ranker_required = False
 
         config.validate()
         return config
@@ -144,7 +140,10 @@ class RequestAwareWebJobService(WebJobService):
     ) -> dict:
         config = self._config_for_job(job.job_id)
 
-        config.candidate_selection.enabled = self.settings.candidate_selection_enabled
+        config.candidate_selection.enabled = False
+        config.analysis.max_candidates_per_project = None
+        config.analysis.candidate_ranker_path = None
+        config.analysis.candidate_ranker_required = False
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
         self._raise_if_cancelled(job.job_id)
 
@@ -214,12 +213,7 @@ class RequestAwareWebJobService(WebJobService):
                 "router_artifact_sha256": _file_sha256(
                     self.settings.router_artifact
                 ),
-                "candidate_ranker_artifact": config.analysis.candidate_ranker_path,
-                "candidate_ranker_artifact_sha256": (
-                    _file_sha256(config.analysis.candidate_ranker_path)
-                    if config.analysis.candidate_ranker_path
-                    else None
-                ),
+                "candidate_coverage_mode": "all_static_candidates",
                 "max_candidates": config.analysis.max_candidates_per_project,
                 "source_file_count": len(source_files),
                 "generated_candidate_count": result.generated_candidate_count,
@@ -295,9 +289,9 @@ class RequestAwareWebJobService(WebJobService):
                 "request_settings": {
                     **options.safe_metadata(),
                     "effective_model": config.model.expert_model,
-                    "candidate_selection_threshold": (
-                        config.candidate_selection.threshold
-                    ),
+                    "candidate_selection_enabled": False,
+                    "candidate_selection_threshold": None,
+                    "candidate_coverage_mode": "all_static_candidates",
                 },
             },
             "candidate_decision_output": (

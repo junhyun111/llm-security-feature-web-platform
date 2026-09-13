@@ -48,7 +48,9 @@ class CandidateSelectionConfig:
 
 @dataclass(slots=True)
 class AnalysisConfig:
-    max_candidates_per_project: int = 4
+    # None preserves every static candidate for recall-first production.
+    # A positive cap is only for an explicit offline/operational experiment.
+    max_candidates_per_project: int | None = None
     context_lines: int = 25
     max_context_characters: int = 30_000
     security_knowledge_path: str | None = None
@@ -94,7 +96,7 @@ class AppConfig:
         """Preserve candidate coverage while collecting decision inputs."""
 
         self.candidate_selection.enabled = False
-        self.analysis.max_candidates_per_project = 4
+        self.analysis.max_candidates_per_project = None
 
     @classmethod
     def from_env(cls, path: str | Path = ".env") -> "AppConfig":
@@ -188,7 +190,9 @@ class AppConfig:
                 ),
             ),
             analysis=AnalysisConfig(
-                max_candidates_per_project=int(values.get("MAX_CANDIDATES", "4")),
+                max_candidates_per_project=_as_optional_positive_int(
+                    values.get("MAX_CANDIDATES")
+                ),
                 context_lines=int(values.get("CONTEXT_LINES", "25")),
                 max_context_characters=int(values.get("MAX_CONTEXT_CHARACTERS", "30000")),
                 security_knowledge_path=_optional(
@@ -251,8 +255,11 @@ class AppConfig:
             raise ValueError("ROUTER_MAX_EXPERTS must be 1 or 2")
         if not 0.0 <= self.router.target_coverage <= 1.0:
             raise ValueError("ROUTER_TARGET_COVERAGE must be between 0 and 1")
-        if self.analysis.max_candidates_per_project < 1:
-            raise ValueError("MAX_CANDIDATES must be positive")
+        if (
+            self.analysis.max_candidates_per_project is not None
+            and self.analysis.max_candidates_per_project < 1
+        ):
+            raise ValueError("MAX_CANDIDATES must be positive when configured")
         if self.analysis.candidate_ranker_required and not self.analysis.candidate_ranker_path:
             raise ValueError(
                 "CANDIDATE_RANKER_PATH is required when CANDIDATE_RANKER_REQUIRED=true"
@@ -350,6 +357,16 @@ def _required(values: dict[str, str], key: str) -> str:
 def _as_optional_float(value: str | None) -> float | None:
     normalized = _optional(value)
     return float(normalized) if normalized is not None else None
+
+
+def _as_optional_positive_int(value: str | None) -> int | None:
+    normalized = _optional(value)
+    if normalized is None or normalized.lower() in {"all", "none", "unlimited"}:
+        return None
+    parsed = int(normalized)
+    if parsed < 1:
+        raise ValueError("MAX_CANDIDATES must be positive")
+    return parsed
 
 
 def _as_bool(value: str) -> bool:

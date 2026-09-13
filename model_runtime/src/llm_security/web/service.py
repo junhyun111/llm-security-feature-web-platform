@@ -80,7 +80,7 @@ class WebSettings:
     max_source_file_bytes: int = 5 * 1024 * 1024
     max_source_total_bytes: int = 100 * 1024 * 1024
     worker_count: int = 1
-    candidate_selection_enabled: bool = True
+    candidate_selection_enabled: bool = False
     max_concurrent_expert_requests: int = 100
     expert_recovery_attempts: int = 1
     detection_max_output_tokens: int = 16_384
@@ -112,7 +112,7 @@ class WebSettings:
             ),
             worker_count=max(1, int(values.get("WEB_WORKERS", "1"))),
             candidate_selection_enabled=_as_bool(
-                values.get("WEB_CANDIDATE_SELECTION_ENABLED", "true")
+                values.get("WEB_CANDIDATE_SELECTION_ENABLED", "false")
             ),
             max_concurrent_expert_requests=min(
                 100,
@@ -826,9 +826,10 @@ class WebJobService:
             raise RuntimeError(
                 "Web analysis calls OpenRouter; set RUN_PAID_EXPERIMENTS=1 in .env"
             )
-        config.candidate_selection.enabled = (
-            self.settings.candidate_selection_enabled
-        )
+        config.candidate_selection.enabled = False
+        config.analysis.max_candidates_per_project = None
+        config.analysis.candidate_ranker_path = None
+        config.analysis.candidate_ranker_required = False
         config.model.max_output_tokens = self.settings.detection_max_output_tokens
         self._raise_if_cancelled(job.job_id)
         progress(20, "Loading C/C++ source files")
@@ -891,12 +892,7 @@ class WebJobService:
                 "router_artifact_sha256": _file_sha256(
                     self.settings.router_artifact
                 ),
-                "candidate_ranker_artifact": config.analysis.candidate_ranker_path,
-                "candidate_ranker_artifact_sha256": (
-                    _file_sha256(config.analysis.candidate_ranker_path)
-                    if config.analysis.candidate_ranker_path
-                    else None
-                ),
+                "candidate_coverage_mode": "all_static_candidates",
                 "max_candidates": config.analysis.max_candidates_per_project,
                 "source_file_count": len(source_files),
                 "generated_candidate_count": result.generated_candidate_count,

@@ -5,7 +5,6 @@ import {
   ScanSearch,
   Settings,
   ShieldCheck,
-  SlidersHorizontal,
   UploadCloud
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -61,7 +60,8 @@ export default function NewAnalysisPage() {
   const [projectName, setProjectName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [sensitivity, setSensitivity] = useState(0.5)
+  const [sensitivity] = useState(1)
+  const setSensitivity = (_value: number) => undefined
   const [modelId, setModelId] = useState(DEFAULT_RUNTIME_MODEL)
   const [trainedModels, setTrainedModels] = useState<string[]>([DEFAULT_RUNTIME_MODEL])
   const [catalogModels, setCatalogModels] = useState<OpenRouterModel[]>([])
@@ -176,7 +176,7 @@ export default function NewAnalysisPage() {
     setError('')
     const form = new FormData()
     form.append('project_name', projectName || 'project')
-    form.append('sensitivity', sensitivity.toString())
+    form.append('sensitivity', '1')
     form.append('model', modelId.trim())
     form.append('api_key', apiKey.trim())
     for (const file of files) {
@@ -251,7 +251,7 @@ export default function NewAnalysisPage() {
 
         <section className="panel analysis-settings-panel">
           <div className="analysis-settings-title">
-            <div className="analysis-settings-icon"><SlidersHorizontal size={18} /></div>
+            <div className="analysis-settings-icon"><ShieldCheck size={18} /></div>
             <div><h2>분석 설정</h2><p>이번 검사에만 적용할 실행 환경입니다.</p></div>
           </div>
 

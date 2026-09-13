@@ -66,10 +66,6 @@ if not exist "%LOCAL_ROOT%model_runtime\artifacts\router.pkl" (
   echo Runtime router artifact is missing: model_runtime\artifacts\router.pkl
   goto :failure
 )
-if not exist "%LOCAL_ROOT%model_runtime\artifacts\candidate_ranker.pkl" (
-  echo Runtime candidate-ranker artifact is missing: model_runtime\artifacts\candidate_ranker.pkl
-  goto :failure
-)
 if not exist "%LOCAL_LOG_DIR%" mkdir "%LOCAL_LOG_DIR%"
 if not exist "%LOCAL_ROOT%deploy-data\sqlite" mkdir "%LOCAL_ROOT%deploy-data\sqlite"
 if not exist "%LOCAL_ROOT%deploy-data\keys" mkdir "%LOCAL_ROOT%deploy-data\keys"

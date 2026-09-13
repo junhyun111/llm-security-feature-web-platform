@@ -42,7 +42,11 @@ class CandidateRanker(Protocol):
 
 
 class CandidateSelector:
-    """Own ranking, recall thresholding, and the Expert-budget Top-K cut."""
+    """Rank candidates and apply only explicitly configured offline filters.
+
+    Production uses ``threshold_enabled=False`` and ``max_candidates=None`` so
+    every generated static candidate reaches the Router and Experts.
+    """
 
     def __init__(
         self,
@@ -110,8 +114,10 @@ class CandidateSelector:
     def _reason(self, candidate: Candidate, selected: bool) -> str:
         if self.threshold_enabled and candidate.suspicion_score < self.threshold:
             return f"below recall threshold {self.threshold:.4f}"
+        if not selected and self.max_candidates is not None:
+            return f"outside configured candidate cap {self.max_candidates}"
         if not selected:
-            return f"outside Top-{self.max_candidates} Expert budget"
+            return "rejected by candidate selection policy"
         reasons = self.suspicion_scorer.reasons(candidate.features)
         return reasons[0] if reasons else "selected by candidate score"
 

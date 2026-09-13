@@ -49,10 +49,11 @@ def create_runtime_app(
     def runtime_metadata() -> dict[str, object]:
         metadata = inspect_artifacts(selected)
         metadata["request_configuration"] = {
-            "supports_sensitivity": True,
-            "sensitivity_min": 0.0,
+            "supports_sensitivity": False,
+            "sensitivity_min": 1.0,
             "sensitivity_max": 1.0,
-            "sensitivity_default": 0.5,
+            "sensitivity_default": 1.0,
+            "candidate_coverage_mode": "all_static_candidates",
             "supports_request_api_key": True,
             "supports_request_model": True,
             "api_key_persistence": "process-memory-only",
@@ -74,7 +75,7 @@ def create_runtime_app(
         files: Annotated[list[UploadFile], File()],
         model: Annotated[str, Form()],
         api_key: Annotated[str, Form()],
-        sensitivity: Annotated[float, Form()] = 0.5,
+        sensitivity: Annotated[float, Form()] = 1.0,
     ) -> dict:
         if len(files) != len(relative_paths):
             raise HTTPException(

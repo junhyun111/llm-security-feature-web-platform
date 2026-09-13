@@ -1,5 +1,5 @@
 {
-  "format_version": 3,
+  "format_version": 4,
   "router": {
     "file": "router.pkl",
     "artifact_version": 5,
@@ -8,16 +8,16 @@
     "replaceable": true,
     "validation_command": "run inspect"
   },
-  "candidate_ranker": {
-    "file": "candidate_ranker.pkl",
-    "backend": "small_mlp",
-    "feature_schema": "semantic-cwe-v3",
-    "sha256": "e77e98da69137e5a87118430f59b2be6fcca408614ac0a81156eab1078ee9a98"
+  "candidate_selection": {
+    "mode": "all_static_candidates",
+    "score_threshold": null,
+    "max_candidates": null,
+    "learned_ranker_required": false
   },
   "escalation": {
     "policy": "evidence-sufficiency-v1",
     "initial_experts": 2,
     "full_experts": 5
   },
-  "note": "Production uses router Top-2 ranking and evidence-triggered remaining-3 escalation."
+  "note": "Production sends every generated static candidate to Router Top-2 and uses evidence-triggered remaining-3 escalation."
 }

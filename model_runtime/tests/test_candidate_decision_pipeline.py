@@ -144,6 +144,24 @@ class FixedForwardModel:
 
 
 class CandidateDecisionPipelineTests(unittest.TestCase):
+    def test_selector_preserves_every_generated_candidate_without_filters(self) -> None:
+        rows = [
+            candidate("C1", score=0.9),
+            candidate("C2", score=0.7),
+            candidate("C3", score=0.2),
+        ]
+
+        selection = CandidateSelector(
+            threshold_enabled=False,
+            max_candidates=None,
+        ).select(rows)
+
+        self.assertEqual(
+            ["C1", "C2", "C3"],
+            [item.candidate_id for item in selection.selected],
+        )
+        self.assertEqual([], selection.rejected)
+
     def test_selector_owns_threshold_and_top_k(self) -> None:
         rows = [candidate("C1", score=0.9), candidate("C2", score=0.7), candidate("C3", score=0.2)]
 

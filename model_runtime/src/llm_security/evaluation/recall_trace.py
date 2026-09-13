@@ -123,7 +123,7 @@ class RecallTracer:
             stages=[
                 _stage("static_candidate", truths, generated_ids),
                 _stage("candidate_threshold", truths, threshold_ids),
-                _stage("candidate_top_k", truths, selected_ids),
+                _stage("candidate_selected", truths, selected_ids),
                 _stage("router_top2", truths, router_ids),
                 _stage("top2_expert_positive", truths, top2_expert_ids),
                 _stage("post_escalation_expert_positive", truths, post_escalation_ids),

@@ -6,7 +6,6 @@
 
 ```text
 artifacts/router.pkl
-artifacts/candidate_ranker.pkl
 ```
 
 Runtime은 요청마다 다음 값을 받습니다.
