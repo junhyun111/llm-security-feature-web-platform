@@ -136,13 +136,10 @@ def route(item: Candidate) -> RouteDecision:
         selected=experts,
         top1_confidence=0.2,
         top1_top2_margin=0.0,
-        policy="utility_full5_escalation",
+        policy="utility_top2",
         reasons=["test"],
         ranked_experts=experts,
         top2_experts=experts[:2],
-        escalation_confidence=0.1,
-        escalated=True,
-        escalation_method="test",
     )
 
 

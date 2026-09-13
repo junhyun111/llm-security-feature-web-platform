@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .acceptance import EvidenceGate
+from .escalation import EvidenceEscalationPolicy
 from .analysis import LearnedCandidateRanker, SemanticStaticAnalyzer
 from .config import AppConfig
 from .evidence import ContextBuilder
@@ -117,6 +118,7 @@ def build_pipeline(
             context_builder=build_context_builder(config),
             models_by_family=config.model.expert_models,
         ),
+        escalation_policy=EvidenceEscalationPolicy(),
         evidence_gate=EvidenceGate(),
     )
 
@@ -157,6 +159,7 @@ def build_batched_web_pipeline(
             max_batch_characters=max_batch_characters,
             max_tasks=max_batch_tasks,
         ),
+        escalation_policy=EvidenceEscalationPolicy(),
         evidence_gate=EvidenceGate(),
     )
 
@@ -203,5 +206,6 @@ def build_parallel_web_pipeline(
             progress_callback=progress_callback,
             cancel_callback=cancel_callback,
         ),
+        escalation_policy=EvidenceEscalationPolicy(),
         evidence_gate=EvidenceGate(),
     )

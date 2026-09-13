@@ -584,10 +584,12 @@ export function PatchDiffPanel({
 
 export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) {
   const routes = analysis.routes || []
+  const escalations = analysis.escalations || []
   const expertFailures = analysis.expert_failures || []
   const recoveredFailures = expertFailures.filter((item) => item.recovered)
   const [selectedId, setSelectedId] = useState(routes[0]?.candidate_id || '')
   const route = routes.find((item) => item.candidate_id === selectedId) || routes[0]
+  const escalation = escalations.find((item) => item.candidate_id === route?.candidate_id)
   const routeBundles = analysis.findings.filter(
     (item) => item.finding.candidate_id === route?.candidate_id
   )
@@ -704,8 +706,14 @@ export function AnalysisTracePanel({ analysis }: { analysis: AnalysisPayload }) 
                   <span>Top-1 confidence<strong>{route.top1_confidence.toFixed(3)}</strong></span>
                   <span>Top-1/2 margin<strong>{route.top1_top2_margin.toFixed(3)}</strong></span>
                   <span>Expected cost<strong>${Number(route.expected_cost || 0).toFixed(4)}</strong></span>
-                  <span>Escalated<strong>{route.escalated ? 'Yes' : 'No'}</strong></span>
+                  <span>Evidence escalation<strong>{escalation?.escalated ? 'Yes' : 'No'}</strong></span>
                 </div>
+                {escalation?.reasons?.length ? (
+                  <div className="trace-reasons">
+                    <h3>Escalation reasons</h3>
+                    <ul>{escalation.reasons.map((reason, index) => <li key={`${reason}-${index}`}>{reason}</li>)}</ul>
+                  </div>
+                ) : null}
                 {route.reasons?.length > 0 && (
                   <div className="trace-reasons">
                     <h3>Decision reasons</h3>

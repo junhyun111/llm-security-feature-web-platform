@@ -203,9 +203,18 @@ class RouteDecision:
     expected_cost: float = 0.0
     ranked_experts: list[ExpertFamily] = field(default_factory=list)
     top2_experts: list[ExpertFamily] = field(default_factory=list)
-    escalation_confidence: float | None = None
-    escalated: bool = False
-    escalation_method: str | None = None
+
+
+@dataclass(slots=True)
+class EscalationDecision:
+    """Post-routing decision derived from actual initial Expert assessments."""
+
+    candidate_id: str
+    escalated: bool
+    initial_experts: list[ExpertFamily]
+    remaining_experts: list[ExpertFamily]
+    reasons: list[str]
+    missing_requirements: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -387,6 +396,10 @@ class PipelineResult:
     analysis_status: str = "completed"
     evidence_bundles: list[EvidenceBundle] = field(default_factory=list)
     expert_assessments: list[ExpertAssessment] = field(default_factory=list)
+    escalations: list[EscalationDecision] = field(default_factory=list)
+    initial_expert_task_count: int = 0
+    escalation_expert_task_count: int = 0
+    full5_candidate_count: int = 0
     candidate_decision_output: Any | None = None
     candidate_decision_input: Any | None = None
 

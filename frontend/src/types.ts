@@ -116,9 +116,15 @@ export type RouteDecision = {
   expected_cost?: number
   ranked_experts?: string[]
   top2_experts?: string[]
-  escalation_confidence?: number | null
-  escalated?: boolean
-  escalation_method?: string | null
+}
+
+export type EscalationDecision = {
+  candidate_id: string
+  escalated: boolean
+  initial_experts: string[]
+  remaining_experts: string[]
+  reasons: string[]
+  missing_requirements: string[]
 }
 
 export type UsageRecord = {
@@ -163,6 +169,11 @@ export type AnalysisPayload = {
     covered_candidate_count?: number
     skipped_expert_task_count?: number
     expert_task_count?: number
+    initial_expert_task_count?: number
+    escalation_expert_task_count?: number
+    full5_candidate_count?: number
+    full5_rate?: number
+    average_experts_per_candidate?: number
     max_concurrent_expert_requests?: number
     structural_rejected_count?: number
     skipped_source_file_count?: number
@@ -173,6 +184,7 @@ export type AnalysisPayload = {
   }
   findings: FindingBundle[]
   routes?: RouteDecision[]
+  escalations?: EscalationDecision[]
   candidate_selection?: Array<{
     candidate_id: string
     score: number

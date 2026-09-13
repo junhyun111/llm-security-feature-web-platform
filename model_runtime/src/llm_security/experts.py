@@ -99,21 +99,34 @@ class ExpertRunner:
         candidates: list[Candidate],
         routes: list[RouteDecision],
     ) -> ExpertRunOutput:
+        return self.run_experts(
+            candidates,
+            {route.candidate_id: route.selected for route in routes},
+            phase="initial",
+        )
+
+    def run_experts(
+        self,
+        candidates: list[Candidate],
+        experts_by_candidate: dict[str, list[ExpertFamily]],
+        *,
+        phase: str,
+    ) -> ExpertRunOutput:
         by_id = {candidate.candidate_id: candidate for candidate in candidates}
         assessments: list[ExpertAssessment] = []
         usage: list[UsageRecord] = []
         errors: list[str] = []
         task_count = 0
         completed_task_count = 0
-        for route in routes:
-            candidate = by_id[route.candidate_id]
-            assignments = route.assignments or [
+        for candidate_id, experts in experts_by_candidate.items():
+            candidate = by_id[candidate_id]
+            assignments = [
                 ExpertAssignment(
                     expert=expert,
                     model_id=self.models_by_family.get(expert, self.model),
                     prompt_version=self.prompt_version,
                 )
-                for expert in route.selected
+                for expert in experts
             ]
             for assignment in assignments:
                 task_count += 1
@@ -470,6 +483,15 @@ class ParallelExpertRunner:
             failures=ordered_failures,
         )
 
+    def run_experts(
+        self,
+        candidates: list[Candidate],
+        experts_by_candidate: dict[str, list[ExpertFamily]],
+        *,
+        phase: str,
+    ) -> ExpertRunOutput:
+        return self.run(candidates, _routes_for_experts(experts_by_candidate))
+
     def _build_tasks(
         self,
         candidates: list[Candidate],
@@ -502,9 +524,6 @@ class ParallelExpertRunner:
                 for expert in desired[candidate.candidate_id][2:]
             ],
             key=lambda item: (
-                routes_by_id[item[0].candidate_id].escalation_confidence
-                if routes_by_id[item[0].candidate_id].escalation_confidence is not None
-                else 1.0,
                 -item[0].suspicion_score,
                 item[0].candidate_id,
                 item[1].value,
@@ -576,6 +595,26 @@ class ParallelExpertRunner:
     def _raise_if_cancelled(self) -> None:
         if self._is_cancelled():
             raise AnalysisCancelled("Analysis cancellation requested")
+
+
+def _routes_for_experts(
+    experts_by_candidate: dict[str, list[ExpertFamily]],
+) -> list[RouteDecision]:
+    """Compatibility adapter for runners while pipeline owns pass selection."""
+    return [
+        RouteDecision(
+            candidate_id=candidate_id,
+            scores={expert: 0.0 for expert in experts},
+            selected=list(experts),
+            top1_confidence=0.0,
+            top1_top2_margin=0.0,
+            policy="explicit_expert_pass",
+            reasons=[],
+            ranked_experts=list(experts),
+            top2_experts=list(experts[:2]),
+        )
+        for candidate_id, experts in experts_by_candidate.items()
+    ]
 
 
 def _task_failure(task: ExpertTask, error: Exception) -> ExpertTaskFailure:
@@ -778,6 +817,15 @@ class BatchedExpertRunner:
             skipped_task_count=len(oversized),
         )
 
+    def run_experts(
+        self,
+        candidates: list[Candidate],
+        experts_by_candidate: dict[str, list[ExpertFamily]],
+        *,
+        phase: str,
+    ) -> ExpertRunOutput:
+        return self.run(candidates, _routes_for_experts(experts_by_candidate))
+
     def _ordered_assignments(
         self,
         candidates: list[Candidate],
@@ -802,9 +850,6 @@ class BatchedExpertRunner:
                 for expert in desired[candidate.candidate_id][2:]
             ],
             key=lambda item: (
-                routes_by_id[item[0].candidate_id].escalation_confidence
-                if routes_by_id[item[0].candidate_id].escalation_confidence is not None
-                else 1.0,
                 -item[0].suspicion_score,
                 item[0].candidate_id,
                 item[1].value,

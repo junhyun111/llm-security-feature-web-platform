@@ -49,13 +49,10 @@ def inspect_artifacts(paths: RuntimePaths) -> dict[str, object]:
             "feature_schema": router.feature_schema_version,
             "assignment_count": len(router.assignments),
             "expert_model_ids": model_ids,
-            "normal_top_k": router.policy.normal_top_k,
-            "full_expert_count": router.policy.full_expert_count,
-            "escalation_gate": (
-                type(router.escalation_gate).__name__
-                if router.escalation_gate is not None
-                else None
-            ),
+            "routing_policy": "top2-ranking-only",
+            "initial_expert_count": 2,
+            "available_expert_count": len(ACTIVE_UTILITY_EXPERTS),
+            "escalation_policy": "evidence-sufficiency-v1",
         },
         "candidate_ranker": {
             "path": str(paths.candidate_ranker_artifact),

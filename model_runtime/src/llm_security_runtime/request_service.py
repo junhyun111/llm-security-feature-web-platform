@@ -239,6 +239,19 @@ class RequestAwareWebJobService(WebJobService):
                 "total_cost": sum(item.cost for item in result.usage),
                 "request_count": len(result.usage),
                 "expert_task_count": result.expert_task_count,
+                "initial_expert_task_count": result.initial_expert_task_count,
+                "escalation_expert_task_count": result.escalation_expert_task_count,
+                "full5_candidate_count": result.full5_candidate_count,
+                "full5_rate": (
+                    result.full5_candidate_count / len(result.candidates)
+                    if result.candidates
+                    else 0.0
+                ),
+                "average_experts_per_candidate": (
+                    result.expert_task_count / len(result.candidates)
+                    if result.candidates
+                    else 0.0
+                ),
                 "submitted_expert_task_count": result.submitted_expert_task_count,
                 "completed_expert_task_count": result.completed_expert_task_count,
                 "failed_expert_task_count": result.failed_expert_task_count,
@@ -291,6 +304,7 @@ class RequestAwareWebJobService(WebJobService):
             "expert_assessments": [
                 to_dict(item) for item in result.expert_assessments
             ],
+            "escalations": [to_dict(item) for item in result.escalations],
             "findings": bundles,
             "routes": [to_dict(item) for item in result.routes],
             "candidate_selection": [

@@ -5,8 +5,10 @@ The production inference path has one responsibility per stage:
 ```text
 SemanticStaticAnalyzer
   -> CandidateSelector
-  -> Router
-  -> ExpertRunner
+  -> Utility Router (rank 5, execute Top-2)
+  -> ExpertRunner (initial Top-2)
+  -> EvidenceEscalationPolicy
+  -> ExpertRunner (remaining 3 only when required)
   -> ExpertAssessment (VULNERABLE / SAFE / UNCERTAIN)
   -> EvidenceGate (deterministic provenance checks)
   -> Deduplication
@@ -16,6 +18,11 @@ SemanticStaticAnalyzer
 `VulnerabilityPipeline` only orchestrates these stages. Ground-truth matching,
 recall tracing, Router baselines, and calibration APIs live under
 `llm_security.evaluation` and are not part of production inference.
+
+The Router only ranks and selects the initial Top-2. It never predicts whether a
+candidate needs all five Experts. `EvidenceEscalationPolicy` makes that decision
+after real Top-2 responses: missing responses, UNCERTAIN, incomplete VULNERABLE
+proof, or SAFE without valid counter-evidence cause a remaining-three pass.
 
 ## Assessment contract
 

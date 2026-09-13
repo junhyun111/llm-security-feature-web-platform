@@ -162,7 +162,6 @@ def route(item: Candidate) -> RouteDecision:
         reasons=["test"],
         ranked_experts=selected,
         top2_experts=selected,
-        escalation_confidence=0.9,
     )
 
 

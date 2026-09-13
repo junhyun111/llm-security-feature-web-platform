@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import math
 import pickle
 from collections import defaultdict
 from dataclasses import dataclass
@@ -16,11 +14,6 @@ from ..models import (
     ExpertAssignment,
     ExpertFamily,
     RouteDecision,
-)
-from .escalation import (
-    EscalationGate,
-    EscalationTrainingRow,
-    independence_top2_confidence,
 )
 from .model import UtilityRoutingModel
 
@@ -64,20 +57,6 @@ class AssignmentStatistics:
     average_prompt_tokens: float = 0.0
     average_completion_tokens: float = 0.0
     average_latency_seconds: float = 0.0
-
-
-@dataclass(slots=True)
-class EscalationCalibration:
-    threshold: float
-    target_truth_recall: float
-    achieved_truth_recall: float
-    exact_coverage: float
-    average_assignments: float
-    average_cost: float
-    full5_rate: float
-    candidate_count: int
-    truth_count: int
-    feasible: bool
 
 
 @dataclass(slots=True)
@@ -130,12 +109,29 @@ class _RankedCandidate:
     family_probabilities: dict[ExpertFamily, float]
 
 
+class _DiscardedEscalationGate:
+    """Read legacy Router artifacts without reviving their pre-execution gate."""
+
+    def __setstate__(self, _state) -> None:
+        return None
+
+
+class _RouterArtifactUnpickler(pickle.Unpickler):
+    def find_class(self, module: str, name: str):
+        if (
+            module == "llm_security.routing.escalation"
+            and name == "EscalationGate"
+        ):
+            return _DiscardedEscalationGate
+        return super().find_class(module, name)
+
+
 class BudgetedUtilityRouter:
-    """Rank five Experts by Utility, then choose Top-2 or escalate to Full-5.
+    """Rank five Experts by Utility and always execute the initial Top-2.
 
     Independent models estimate assignment success. Utility is used only for
-    ranking; escalation confidence comes from success probabilities or a
-    learned Top2Sufficient gate.
+    ranking. Evidence sufficiency after those results controls any remaining
+    Expert pass in ``EvidenceEscalationPolicy``.
     """
 
     artifact_version = 5
@@ -150,7 +146,6 @@ class BudgetedUtilityRouter:
         *,
         policy: UtilityPolicyConfig | None = None,
         feature_schema_version: str = "semantic-cwe-v3",
-        escalation_gate: EscalationGate | None = None,
     ) -> None:
         self.model = model
         self.assignments = dict(assignments)
@@ -158,7 +153,6 @@ class BudgetedUtilityRouter:
         self.policy = policy or UtilityPolicyConfig()
         self.policy.validate()
         self.feature_schema_version = feature_schema_version
-        self.escalation_gate = escalation_gate
         self.execution_model_id: str | None = None
         self.best_single_assignment_id: str | None = None
         self.best_fixed_pair_assignment_ids: tuple[str, str] | None = None
@@ -276,87 +270,6 @@ class BudgetedUtilityRouter:
         }
         return router
 
-    def fit_escalation_gate(
-        self,
-        samples: Iterable[UtilitySample],
-        *,
-        seed: int = 2026,
-    ) -> int:
-        groups = _group_samples(samples)
-        self._require_truth_labels(groups)
-        self.development_project_ids.update(
-            row.candidate.project_id for rows in groups.values() for row in rows
-        )
-        rows: list[EscalationTrainingRow] = []
-        for outcome_rows in groups.values():
-            candidate = outcome_rows[0].candidate
-            ranked = self._rank(candidate)
-            top2_ids = ranked.ranked_assignment_ids[: self.policy.normal_top_k]
-            rows.append(
-                EscalationTrainingRow(
-                    candidate=candidate,
-                    family_probabilities=ranked.family_probabilities,
-                    ranked_experts=[
-                        self.assignments[item].expert
-                        for item in ranked.ranked_assignment_ids
-                    ],
-                    top2_sufficient=_top2_sufficient(outcome_rows, top2_ids),
-                )
-            )
-        self.escalation_gate = EscalationGate(seed=seed).fit(rows)
-        return len(rows)
-
-    def calibrate_threshold(
-        self,
-        samples: Iterable[UtilitySample],
-        *,
-        target_truth_recall: float = 0.95,
-    ) -> EscalationCalibration:
-        if not 0.0 <= target_truth_recall <= 1.0:
-            raise ValueError("target_truth_recall must be between 0 and 1")
-        groups = _group_samples(samples)
-        if not groups:
-            raise ValueError("Threshold calibration requires outcome samples")
-        self._require_truth_labels(groups)
-        self.development_project_ids.update(
-            row.candidate.project_id for rows in groups.values() for row in rows
-        )
-        confidences = [
-            self._escalation_confidence(rows[0].candidate, self._rank(rows[0].candidate))
-            for rows in groups.values()
-        ]
-        thresholds = {0.0, 1.0, self.policy.escalation_threshold}
-        thresholds.update(
-            min(1.0, math.nextafter(confidence, math.inf))
-            for confidence in confidences
-        )
-        candidates = [
-            self._calibration_at(groups, threshold, target_truth_recall)
-            for threshold in sorted(thresholds)
-        ]
-        feasible = [item for item in candidates if item.feasible]
-        if feasible:
-            selected = min(
-                feasible,
-                key=lambda item: (
-                    item.average_cost,
-                    item.average_assignments,
-                    -item.achieved_truth_recall,
-                    item.threshold,
-                ),
-            )
-        else:
-            selected = min(
-                candidates,
-                key=lambda item: (
-                    -item.achieved_truth_recall,
-                    item.average_cost,
-                    item.average_assignments,
-                ),
-            )
-        self.policy.escalation_threshold = selected.threshold
-        return selected
-
     def calibrate_baselines(
         self, samples: Iterable[UtilitySample]
     ) -> BaselineCalibration:
@@ -430,10 +343,7 @@ class BudgetedUtilityRouter:
     def route(self, candidate: Candidate) -> RouteDecision:
         ranked = self._rank(candidate)
         top2_ids = ranked.ranked_assignment_ids[: self.policy.normal_top_k]
-        confidence = self._escalation_confidence(candidate, ranked)
-        escalated = confidence < self.policy.escalation_threshold
-        selected_ids = ranked.ranked_assignment_ids if escalated else top2_ids
-        selected_assignments = [self.assignments[item] for item in selected_ids]
+        selected_assignments = [self.assignments[item] for item in top2_ids]
         ranked_experts = [
             self.assignments[item].expert for item in ranked.ranked_assignment_ids
         ]
@@ -441,7 +351,6 @@ class BudgetedUtilityRouter:
         top_probabilities = sorted(ranked.family_probabilities.values(), reverse=True)
         top = top_probabilities[0] if top_probabilities else 0.0
         second = top_probabilities[1] if len(top_probabilities) > 1 else 0.0
-        method = "learned_gate" if self.escalation_gate is not None else "independence"
         reasons = [
             (
                 f"rank {index}: {self.assignments[item].expert.value} via "
@@ -451,30 +360,22 @@ class BudgetedUtilityRouter:
             )
             for index, item in enumerate(ranked.ranked_assignment_ids, start=1)
         ]
-        reasons.append(
-            f"{method} Top-2 sufficiency={confidence:.3f}; threshold="
-            f"{self.policy.escalation_threshold:.3f}; "
-            + ("Full-5 escalation" if escalated else "Top-2 path")
-        )
         return RouteDecision(
             candidate_id=candidate.candidate_id,
             scores=ranked.family_probabilities,
             selected=selected_experts,
             top1_confidence=top,
             top1_top2_margin=top - second,
-            policy="utility_full5_escalation" if escalated else "utility_top2",
+            policy="utility_top2",
             reasons=reasons,
             available_families=list(ACTIVE_UTILITY_EXPERTS),
             learned_scores=ranked.family_probabilities,
             assignments=selected_assignments,
             expected_cost=sum(
-                self.statistics[item].average_cost for item in selected_ids
+                self.statistics[item].average_cost for item in top2_ids
             ),
             ranked_experts=ranked_experts,
             top2_experts=ranked_experts[: self.policy.normal_top_k],
-            escalation_confidence=confidence,
-            escalated=escalated,
-            escalation_method=method,
         )
 
     def evaluate(self, samples: Iterable[UtilitySample]) -> UtilityRouterMetrics:
@@ -514,31 +415,11 @@ class BudgetedUtilityRouter:
                 if family in by_family
             ]
 
-        def formula(rows: list[UtilitySample]) -> list[str]:
-            ranked = self._rank(rows[0].candidate)
-            top2 = ranked.ranked_assignment_ids[:2]
-            confidence = independence_top2_confidence(
-                [ranked.assignment_probabilities[item] for item in top2]
-            )
-            return (
-                top2
-                if confidence >= self.policy.escalation_threshold
-                else ranked.ranked_assignment_ids
-            )
-
         report = {
             "full5": self._evaluate_groups(groups, ranked_ids),
             "fixed_top2_e1_e3": self._evaluate_groups(groups, fixed_top2),
             "utility_top2": self._evaluate_groups(
                 groups, lambda rows: ranked_ids(rows)[:2]
-            ),
-            "formula_escalation": self._evaluate_groups(groups, formula),
-            "adaptive_gate": self._evaluate_groups(
-                groups,
-                lambda rows: [
-                    item.assignment_id
-                    for item in self.route(rows[0].candidate).assignments
-                ],
             ),
         }
         if self.best_single_assignment_id is not None:
@@ -562,7 +443,7 @@ class BudgetedUtilityRouter:
     @classmethod
     def load(cls, path: str | Path) -> "BudgetedUtilityRouter":
         with Path(path).open("rb") as handle:
-            router = pickle.load(handle)  # noqa: S301 - trusted local artifact
+            router = _RouterArtifactUnpickler(handle).load()  # noqa: S301 - trusted local artifact
         if (
             not isinstance(router, cls)
             or getattr(router, "_artifact_version", None) != cls.artifact_version
@@ -570,6 +451,9 @@ class BudgetedUtilityRouter:
             != cls.expert_taxonomy_version
         ):
             raise TypeError("Incompatible Utility Router artifact; retrain it")
+        # v5 artifacts may carry the retired gate.  It must never influence
+        # runtime routing after the Top-2-only migration.
+        router.__dict__.pop("escalation_gate", None)
         return router
 
     def _validate_assignment_pool(self) -> None:
@@ -639,64 +523,6 @@ class BudgetedUtilityRouter:
             - self.policy.cost_weight * stats.average_cost
         )
 
-    def _escalation_confidence(
-        self, candidate: Candidate, ranked: _RankedCandidate
-    ) -> float:
-        if self.escalation_gate is not None:
-            return self.escalation_gate.predict_proba(
-                candidate,
-                ranked.family_probabilities,
-                [self.assignments[item].expert for item in ranked.ranked_assignment_ids],
-            )
-        return independence_top2_confidence(
-            [
-                ranked.assignment_probabilities[item]
-                for item in ranked.ranked_assignment_ids[: self.policy.normal_top_k]
-            ]
-        )
-
-    def _calibration_at(
-        self,
-        groups: dict[tuple[str, str], list[UtilitySample]],
-        threshold: float,
-        target: float,
-    ) -> EscalationCalibration:
-        total_truths = matched_truths = assignments = full5 = 0
-        exact = 0
-        cost = 0.0
-        for rows in groups.values():
-            ranked = self._rank(rows[0].candidate)
-            confidence = self._escalation_confidence(rows[0].candidate, ranked)
-            escalated = confidence < threshold
-            selected_ids = (
-                ranked.ranked_assignment_ids
-                if escalated
-                else ranked.ranked_assignment_ids[: self.policy.normal_top_k]
-            )
-            selected_rows = _selected_rows(rows, selected_ids)
-            truths = _truth_ids(rows)
-            matched = _matched_truth_ids(selected_rows) & truths
-            total_truths += len(truths)
-            matched_truths += len(matched)
-            exact += int(truths <= matched)
-            assignments += len(selected_ids)
-            full5 += int(escalated)
-            cost += sum(item.cost for item in selected_rows)
-        count = len(groups)
-        recall = matched_truths / total_truths if total_truths else 1.0
-        return EscalationCalibration(
-            threshold=threshold,
-            target_truth_recall=target,
-            achieved_truth_recall=recall,
-            exact_coverage=exact / count,
-            average_assignments=assignments / count,
-            average_cost=cost / count,
-            full5_rate=full5 / count,
-            candidate_count=count,
-            truth_count=total_truths,
-            feasible=recall >= target,
-        )
-
     def _evaluate_groups(
         self,
         groups: dict[tuple[str, str], list[UtilitySample]],
@@ -708,9 +534,7 @@ class BudgetedUtilityRouter:
         expected_cost = realized_cost = realized_reward = oracle_reward = 0.0
         prompt_tokens = completion_tokens = latency = 0.0
         calibration_pairs: list[tuple[float, bool]] = []
-        gate_calibration_pairs: list[tuple[float, bool]] = []
         web_cases: set[str] = set()
-        escalation_tp = escalation_fn = escalation_fp = escalation_tn = 0
         for rows in groups.values():
             candidate = rows[0].candidate
             selected_ids = selector(rows)
@@ -724,20 +548,6 @@ class BudgetedUtilityRouter:
             oracle_successes += int(any(item.success for item in rows))
             assignments += len(selected_ids)
             full5 += int(len(selected_ids) == len(ACTIVE_UTILITY_EXPERTS))
-            ranked = self._rank(candidate)
-            top2_ids = ranked.ranked_assignment_ids[: self.policy.normal_top_k]
-            top2_sufficient = _top2_sufficient(rows, top2_ids)
-            predicted_escalation = len(selected_ids) == len(ACTIVE_UTILITY_EXPERTS)
-            gate_confidence = self._escalation_confidence(candidate, ranked)
-            gate_calibration_pairs.append((gate_confidence, top2_sufficient))
-            if not top2_sufficient and predicted_escalation:
-                escalation_tp += 1
-            elif not top2_sufficient:
-                escalation_fn += 1
-            elif predicted_escalation:
-                escalation_fp += 1
-            else:
-                escalation_tn += 1
             truths = _truth_ids(rows)
             matched = _matched_truth_ids(selected_rows) & truths
             total_truths += len(truths)
@@ -797,26 +607,6 @@ class BudgetedUtilityRouter:
             if calibration_pairs
             else 0.0
         )
-        gate_brier = (
-            sum(
-                (probability - float(label)) ** 2
-                for probability, label in gate_calibration_pairs
-            )
-            / len(gate_calibration_pairs)
-            if gate_calibration_pairs
-            else 0.0
-        )
-        required_escalations = escalation_tp + escalation_fn
-        sufficient_top2 = escalation_fp + escalation_tn
-        escalation_recall = (
-            escalation_tp / required_escalations if required_escalations else 1.0
-        )
-        missed_escalation_rate = (
-            escalation_fn / required_escalations if required_escalations else 0.0
-        )
-        unnecessary_escalation_rate = (
-            escalation_fp / sufficient_top2 if sufficient_top2 else 0.0
-        )
         return UtilityRouterMetrics(
             candidate_count=count,
             success_coverage=selected_successes / count,
@@ -841,13 +631,6 @@ class BudgetedUtilityRouter:
             estimated_api_requests=len(web_cases),
             brier_score=brier,
             expected_calibration_error=_expected_calibration_error(calibration_pairs),
-            escalation_recall=escalation_recall,
-            missed_escalation_rate=missed_escalation_rate,
-            unnecessary_escalation_rate=unnecessary_escalation_rate,
-            gate_brier_score=gate_brier,
-            gate_expected_calibration_error=_expected_calibration_error(
-                gate_calibration_pairs
-            ),
         )
 
     @staticmethod
@@ -871,33 +654,6 @@ class BudgetedUtilityRouter:
                 f"expected label_version={UTILITY_OUTCOME_LABEL_VERSION}. "
                 f"Recollect legacy rows. Invalid labels for {preview}"
             )
-
-
-def split_gate_calibration_samples(
-    samples: Iterable[UtilitySample],
-    *,
-    seed: int = 2026,
-    gate_fraction: float = 0.5,
-) -> tuple[list[UtilitySample], list[UtilitySample]]:
-    """Split a dev outcome matrix by project for gate fitting and calibration."""
-    if not 0.0 < gate_fraction < 1.0:
-        raise ValueError("gate_fraction must be between 0 and 1")
-    rows = list(samples)
-    projects = sorted({item.candidate.project_id for item in rows})
-    if len(projects) < 2:
-        raise ValueError("At least two dev projects are required to split gate/calibration")
-    ordered = sorted(
-        projects,
-        key=lambda project: hashlib.sha256(
-            f"{seed}:{project}".encode("utf-8")
-        ).hexdigest(),
-    )
-    cut = min(len(ordered) - 1, max(1, round(len(ordered) * gate_fraction)))
-    gate_projects = set(ordered[:cut])
-    return (
-        [item for item in rows if item.candidate.project_id in gate_projects],
-        [item for item in rows if item.candidate.project_id not in gate_projects],
-    )
 
 
 def assert_project_disjoint(
@@ -965,12 +721,6 @@ def _truth_ids(rows: list[UtilitySample]) -> set[str]:
 
 def _matched_truth_ids(rows: list[UtilitySample]) -> set[str]:
     return {truth_id for item in rows for truth_id in item.matched_truth_ids}
-
-
-def _top2_sufficient(rows: list[UtilitySample], top2_ids: list[str]) -> bool:
-    truths = _truth_ids(rows)
-    matched = _matched_truth_ids(_selected_rows(rows, top2_ids))
-    return truths <= matched
 
 
 def _validated_true_count(sample: UtilitySample) -> int:

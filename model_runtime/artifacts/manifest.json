@@ -1,7 +1,10 @@
 {
-  "format_version": 2,
+  "format_version": 3,
   "router": {
     "file": "router.pkl",
+    "artifact_version": 5,
+    "feature_schema": "semantic-cwe-v3",
+    "policy": "top2-ranking-only",
     "replaceable": true,
     "validation_command": "run inspect"
   },
@@ -11,5 +14,10 @@
     "feature_schema": "semantic-cwe-v3",
     "sha256": "e77e98da69137e5a87118430f59b2be6fcca408614ac0a81156eab1078ee9a98"
   },
-  "note": "Production uses the router and candidate ranker while the EvidenceGate is deterministic."
+  "escalation": {
+    "policy": "evidence-sufficiency-v1",
+    "initial_experts": 2,
+    "full_experts": 5
+  },
+  "note": "Production uses router Top-2 ranking and evidence-triggered remaining-3 escalation."
 }

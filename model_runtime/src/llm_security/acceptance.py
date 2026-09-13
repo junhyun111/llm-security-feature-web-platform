@@ -55,7 +55,12 @@ class EvidenceGate:
         evidence_ids = {item.evidence_id for item in candidate.evidence} if candidate else set()
         checks: dict[str, bool | None] = {
             "candidate_attribution_valid": candidate is not None,
-            "expert_route_valid": route is not None and assessment.expert in route.selected,
+            # ``selected`` records the initial Top-2.  A ranked Expert can also
+            # be executed in the evidence-driven escalation pass, so use the
+            # full ranked execution pool when it is available.
+            "expert_route_valid": route is not None and assessment.expert in (
+                route.ranked_experts or route.selected
+            ),
             "cwe_present": bool(assessment.cwes),
             "cwe_domain_valid": bool(assessment.cwes) and all(
                 expert_for_cwe(cwe) == assessment.expert for cwe in assessment.cwes

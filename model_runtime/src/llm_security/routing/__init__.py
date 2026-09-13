@@ -1,4 +1,3 @@
-from .escalation import EscalationGate, EscalationTrainingRow
 from .model import UtilityRoutingModel
 from .router import Router
 from .utility import (
@@ -10,8 +9,6 @@ from .utility import (
 __all__ = [
     "AssignmentStatistics",
     "BudgetedUtilityRouter",
-    "EscalationGate",
-    "EscalationTrainingRow",
     "Router",
     "UtilityPolicyConfig",
     "UtilityRoutingModel",
